@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/git-pkgs/git-pkgs/internal/database"
@@ -15,6 +17,7 @@ import (
 	"github.com/git-pkgs/vers"
 	"github.com/git-pkgs/vulns"
 	"github.com/git-pkgs/vulns/osv"
+	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 )
 
@@ -103,10 +106,11 @@ func runVulnsSync(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	return syncVulnerabilitiesForDeps(db, lockfileDeps, force, quiet, cmd.OutOrStdout())
+	source := osv.New(osv.WithUserAgent("git-pkgs/" + version))
+	return syncVulnerabilitiesForDeps(db, source, lockfileDeps, force, quiet, cmd.OutOrStdout())
 }
 
-func syncVulnerabilitiesForDeps(db *database.DB, lockfileDeps []database.Dependency, force, quiet bool, w io.Writer) error {
+func syncVulnerabilitiesForDeps(db *database.DB, source vulns.Source, lockfileDeps []database.Dependency, force, quiet bool, w io.Writer) error {
 	if len(lockfileDeps) == 0 {
 		if !quiet {
 			_, _ = fmt.Fprintln(w, "No lockfile dependencies to sync.")
@@ -128,7 +132,6 @@ func syncVulnerabilitiesForDeps(db *database.DB, lockfileDeps []database.Depende
 		_, _ = fmt.Fprintf(w, "Syncing vulnerabilities for %d packages...\n", len(uniquePkgs))
 	}
 
-	source := osv.New(osv.WithUserAgent("git-pkgs/" + version))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -162,10 +165,58 @@ func syncVulnerabilitiesForDeps(db *database.DB, lockfileDeps []database.Depende
 		return fmt.Errorf("querying OSV: %w", err)
 	}
 
-	// Collect unique vuln IDs and fetch full details
+	// Collect unique vuln IDs across all batch results
+	uniqueVulnIDs := make(map[string]bool)
+	for _, batchVulns := range results {
+		for _, v := range batchVulns {
+			uniqueVulnIDs[v.ID] = true
+		}
+	}
+
+	// Fetch all unique vulnerability details concurrently
+	fetchedVulns := make(map[string]*vulns.Vulnerability)
+	var mu sync.Mutex
+
+	isTTY := false
+	if f, ok := w.(*os.File); ok {
+		isTTY = isatty.IsTerminal(f.Fd()) || isatty.IsCygwinTerminal(f.Fd())
+	}
+
+	totalToFetch := len(uniqueVulnIDs)
+	var fetchCount int
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 20)
+
+	for id := range uniqueVulnIDs {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer func() { <-sem; wg.Done() }()
+
+			fullVuln, err := source.Get(ctx, id)
+
+			mu.Lock()
+			defer mu.Unlock()
+			fetchCount++
+			if err == nil && fullVuln != nil {
+				fetchedVulns[id] = fullVuln
+			}
+			if isTTY && !quiet {
+				_, _ = fmt.Fprintf(w, "\rFetching vulnerability details... %d/%d", fetchCount, totalToFetch)
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	if isTTY && !quiet && totalToFetch > 0 {
+		_, _ = fmt.Fprintf(w, "\r\033[K")
+	}
+
+	// Clear existing vulns and store results
+	now := time.Now().Format(time.RFC3339)
 	seenVulns := make(map[string]bool)
 	totalVulns := 0
-	now := time.Now().Format(time.RFC3339)
 
 	for i, batchVulns := range results {
 		key := queryKeys[i]
@@ -177,13 +228,29 @@ func syncVulnerabilitiesForDeps(db *database.DB, lockfileDeps []database.Depende
 
 		for _, v := range batchVulns {
 			if seenVulns[v.ID] {
+				// Still insert the package mapping for deduped vulns
+				fullVuln := fetchedVulns[v.ID]
+				if fullVuln == nil {
+					continue
+				}
+				fixedVersion := fullVuln.FixedVersion(key.ecosystem, key.name)
+				affectedVersions := buildVersRange(fullVuln, key.ecosystem, key.name)
+				vpRecord := database.VulnerabilityPackage{
+					VulnerabilityID:  fullVuln.ID,
+					Ecosystem:        key.ecosystem,
+					PackageName:      key.name,
+					AffectedVersions: affectedVersions,
+					FixedVersions:    fixedVersion,
+				}
+				if err := db.InsertVulnerabilityPackage(vpRecord); err != nil {
+					return fmt.Errorf("inserting vulnerability package: %w", err)
+				}
 				continue
 			}
 			seenVulns[v.ID] = true
 
-			// Fetch full vulnerability details
-			fullVuln, err := source.Get(ctx, v.ID)
-			if err != nil || fullVuln == nil {
+			fullVuln := fetchedVulns[v.ID]
+			if fullVuln == nil {
 				continue
 			}
 
@@ -341,7 +408,8 @@ func runVulnsScan(cmd *cobra.Command, args []string) error {
 
 	// Auto-sync before cached scan (skip for --live and --no-sync)
 	if !live && !noSync && db != nil {
-		if err := syncVulnerabilitiesForDeps(db, lockfileDeps, false, false, cmd.OutOrStdout()); err != nil {
+		source := osv.New(osv.WithUserAgent("git-pkgs/" + version))
+		if err := syncVulnerabilitiesForDeps(db, source, lockfileDeps, false, false, cmd.OutOrStdout()); err != nil {
 			return fmt.Errorf("syncing vulnerabilities: %w", err)
 		}
 	}
@@ -587,11 +655,11 @@ type SARIFDriver struct {
 }
 
 type SARIFRule struct {
-	ID               string           `json:"id"`
-	ShortDescription SARIFMessage     `json:"shortDescription"`
-	FullDescription  SARIFMessage     `json:"fullDescription,omitempty"`
-	Help             SARIFMessage     `json:"help,omitempty"`
-	Properties       map[string]any   `json:"properties,omitempty"`
+	ID               string         `json:"id"`
+	ShortDescription SARIFMessage   `json:"shortDescription"`
+	FullDescription  SARIFMessage   `json:"fullDescription,omitempty"`
+	Help             SARIFMessage   `json:"help,omitempty"`
+	Properties       map[string]any `json:"properties,omitempty"`
 }
 
 type SARIFResult struct {
@@ -711,11 +779,11 @@ type VulnShowResult struct {
 }
 
 type VulnShowExposure struct {
-	Affected        bool     `json:"affected"`
-	AffectedPackage string   `json:"affected_package,omitempty"`
-	CurrentVersion  string   `json:"current_version,omitempty"`
-	FixedVersion    string   `json:"fixed_version,omitempty"`
-	Commit          string   `json:"commit,omitempty"`
+	Affected        bool   `json:"affected"`
+	AffectedPackage string `json:"affected_package,omitempty"`
+	CurrentVersion  string `json:"current_version,omitempty"`
+	FixedVersion    string `json:"fixed_version,omitempty"`
+	Commit          string `json:"commit,omitempty"`
 }
 
 func runVulnsShow(cmd *cobra.Command, args []string) error {
@@ -915,8 +983,8 @@ Defaults to comparing HEAD~1 with HEAD.`,
 }
 
 type VulnsDiffResult struct {
-	Added   []VulnResult `json:"added"`
-	Fixed   []VulnResult `json:"fixed"`
+	Added []VulnResult `json:"added"`
+	Fixed []VulnResult `json:"fixed"`
 }
 
 func runVulnsDiff(cmd *cobra.Command, args []string) error {
@@ -1264,12 +1332,12 @@ Shows a timeline of how vulnerabilities have changed over time.`,
 }
 
 type VulnLogEntry struct {
-	SHA         string       `json:"sha"`
-	Message     string       `json:"message"`
-	Author      string       `json:"author"`
-	Date        string       `json:"date"`
-	Introduced  []VulnResult `json:"introduced,omitempty"`
-	Fixed       []VulnResult `json:"fixed,omitempty"`
+	SHA        string       `json:"sha"`
+	Message    string       `json:"message"`
+	Author     string       `json:"author"`
+	Date       string       `json:"date"`
+	Introduced []VulnResult `json:"introduced,omitempty"`
+	Fixed      []VulnResult `json:"fixed,omitempty"`
 }
 
 func runVulnsLog(cmd *cobra.Command, args []string) error {
@@ -1312,7 +1380,6 @@ func runVulnsLog(cmd *cobra.Command, args []string) error {
 		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No commits with dependency changes found.")
 		return nil
 	}
-
 
 	minSeverity := 4
 	if severity != "" {
@@ -1836,7 +1903,6 @@ func runVulnsPraise(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-
 	minSeverity := 4
 	if severity != "" {
 		if order, ok := severityOrder[strings.ToLower(severity)]; ok {
@@ -1934,10 +2000,10 @@ func runVulnsPraise(cmd *cobra.Command, args []string) error {
 }
 
 type PraiseAuthorSummary struct {
-	Author        string         `json:"author"`
-	TotalFixes    int            `json:"total_fixes"`
-	BySeverity    map[string]int `json:"by_severity"`
-	UniquePackages int           `json:"unique_packages"`
+	Author         string         `json:"author"`
+	TotalFixes     int            `json:"total_fixes"`
+	BySeverity     map[string]int `json:"by_severity"`
+	UniquePackages int            `json:"unique_packages"`
 }
 
 type PraiseSummary struct {
