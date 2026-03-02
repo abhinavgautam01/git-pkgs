@@ -17,7 +17,6 @@ The core commands (`list`, `history`, `blame`, `diff`, `stale`, etc.) work entir
 ## Installation
 
 ```bash
-brew tap git-pkgs/git-pkgs
 brew install git-pkgs
 ```
 
