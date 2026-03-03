@@ -47,10 +47,10 @@ func Execute() error {
 
 func NewRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:              "git-pkgs",
-		Version:          versionStr,
-		Short:            shortDesc,
-		Long:             longDesc,
+		Use:               "git-pkgs",
+		Version:           versionStr,
+		Short:             shortDesc,
+		Long:              longDesc,
 		SilenceUsage:      true,
 		PersistentPreRun:  preRun,
 		PersistentPostRun: postRun,

@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/git-pkgs/git-pkgs/internal/database"
 	"github.com/git-pkgs/enrichment"
+	"github.com/git-pkgs/git-pkgs/internal/database"
 	"github.com/git-pkgs/git-pkgs/internal/git"
 	"github.com/git-pkgs/purl"
 	"github.com/spf13/cobra"
@@ -36,15 +36,15 @@ The SBOM includes all dependencies and optionally enriched license information.`
 
 // CycloneDX BOM structure
 type CycloneDXBOM struct {
-	XMLName      xml.Name                  `xml:"bom" json:"-"`
-	XMLNS        string                    `xml:"xmlns,attr" json:"-"`
-	Version      int                       `xml:"version,attr" json:"version"`
-	BOMFormat    string                    `xml:"-" json:"bomFormat"`
-	SpecVersion  string                    `xml:"-" json:"specVersion"`
-	SerialNumber string                    `xml:"serialNumber,attr,omitempty" json:"serialNumber,omitempty"`
-	Metadata     *CycloneDXMetadata        `xml:"metadata,omitempty" json:"metadata,omitempty"`
-	Components   []CycloneDXComponent      `xml:"components>component" json:"components"`
-	Dependencies []CycloneDXDependency     `xml:"dependencies>dependency,omitempty" json:"dependencies,omitempty"`
+	XMLName      xml.Name              `xml:"bom" json:"-"`
+	XMLNS        string                `xml:"xmlns,attr" json:"-"`
+	Version      int                   `xml:"version,attr" json:"version"`
+	BOMFormat    string                `xml:"-" json:"bomFormat"`
+	SpecVersion  string                `xml:"-" json:"specVersion"`
+	SerialNumber string                `xml:"serialNumber,attr,omitempty" json:"serialNumber,omitempty"`
+	Metadata     *CycloneDXMetadata    `xml:"metadata,omitempty" json:"metadata,omitempty"`
+	Components   []CycloneDXComponent  `xml:"components>component" json:"components"`
+	Dependencies []CycloneDXDependency `xml:"dependencies>dependency,omitempty" json:"dependencies,omitempty"`
 }
 
 type CycloneDXMetadata struct {
@@ -81,13 +81,13 @@ type CycloneDXDependency struct {
 
 // SPDX structure
 type SPDXSBOM struct {
-	SPDXVersion       string            `json:"spdxVersion"`
-	DataLicense       string            `json:"dataLicense"`
-	SPDXID            string            `json:"SPDXID"`
-	Name              string            `json:"name"`
-	DocumentNamespace string            `json:"documentNamespace"`
-	CreationInfo      SPDXCreationInfo  `json:"creationInfo"`
-	Packages          []SPDXPackage     `json:"packages"`
+	SPDXVersion       string             `json:"spdxVersion"`
+	DataLicense       string             `json:"dataLicense"`
+	SPDXID            string             `json:"SPDXID"`
+	Name              string             `json:"name"`
+	DocumentNamespace string             `json:"documentNamespace"`
+	CreationInfo      SPDXCreationInfo   `json:"creationInfo"`
+	Packages          []SPDXPackage      `json:"packages"`
 	Relationships     []SPDXRelationship `json:"relationships,omitempty"`
 }
 
@@ -97,12 +97,12 @@ type SPDXCreationInfo struct {
 }
 
 type SPDXPackage struct {
-	SPDXID           string `json:"SPDXID"`
-	Name             string `json:"name"`
-	VersionInfo      string `json:"versionInfo,omitempty"`
-	DownloadLocation string `json:"downloadLocation"`
-	LicenseConcluded string `json:"licenseConcluded,omitempty"`
-	LicenseDeclared  string `json:"licenseDeclared,omitempty"`
+	SPDXID           string            `json:"SPDXID"`
+	Name             string            `json:"name"`
+	VersionInfo      string            `json:"versionInfo,omitempty"`
+	DownloadLocation string            `json:"downloadLocation"`
+	LicenseConcluded string            `json:"licenseConcluded,omitempty"`
+	LicenseDeclared  string            `json:"licenseDeclared,omitempty"`
 	ExternalRefs     []SPDXExternalRef `json:"externalRefs,omitempty"`
 }
 

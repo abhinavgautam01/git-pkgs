@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	stateFile     = "PKGS_BISECT_STATE"
-	logFile       = "PKGS_BISECT_LOG"
+	stateFile      = "PKGS_BISECT_STATE"
+	logFile        = "PKGS_BISECT_LOG"
 	candidatesFile = "PKGS_BISECT_CANDIDATES"
 )
 

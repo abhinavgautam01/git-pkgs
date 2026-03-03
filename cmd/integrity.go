@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/git-pkgs/git-pkgs/internal/database"
 	"github.com/git-pkgs/enrichment"
+	"github.com/git-pkgs/git-pkgs/internal/database"
 	"github.com/git-pkgs/git-pkgs/internal/git"
 	"github.com/git-pkgs/purl"
 	"github.com/spf13/cobra"

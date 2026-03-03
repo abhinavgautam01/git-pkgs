@@ -57,7 +57,6 @@ type LicenseInfo struct {
 	FlagReason   string   `json:"flag_reason,omitempty"`
 }
 
-
 func runLicenses(cmd *cobra.Command, args []string) error {
 	commit, _ := cmd.Flags().GetString("commit")
 	branchName, _ := cmd.Flags().GetString("branch")

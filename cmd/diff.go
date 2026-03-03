@@ -110,12 +110,12 @@ func runDiff(cmd *cobra.Command, args []string) error {
 
 // diffBetweenCommits compares dependencies between two commits using on-demand indexing.
 func diffBetweenCommits(repo *git.Repository, fromRef, toRef string) (*DiffResult, error) {
-	fromDeps, err := repo.GetDependencies( fromRef, "")
+	fromDeps, err := repo.GetDependencies(fromRef, "")
 	if err != nil {
 		return nil, fmt.Errorf("getting deps at %s: %w", fromRef, err)
 	}
 
-	toDeps, err := repo.GetDependencies( toRef, "")
+	toDeps, err := repo.GetDependencies(toRef, "")
 	if err != nil {
 		return nil, fmt.Errorf("getting deps at %s: %w", toRef, err)
 	}
