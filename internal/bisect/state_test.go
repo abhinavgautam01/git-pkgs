@@ -203,13 +203,13 @@ func TestManager_IsGood(t *testing.T) {
 		sha      string
 		expected bool
 	}{
-		{"abc123def456", true},           // exact match
-		{"abc123", true},                 // prefix match
-		{"abc123def456789", true},        // sha is prefix of good rev
-		{"111222333444", true},           // exact match second rev
-		{"111222", true},                 // prefix match second rev
-		{"bad123", false},                // not in list
-		{"abc124", false},                // similar but different
+		{"abc123def456", true},    // exact match
+		{"abc123", true},          // prefix match
+		{"abc123def456789", true}, // sha is prefix of good rev
+		{"111222333444", true},    // exact match second rev
+		{"111222", true},          // prefix match second rev
+		{"bad123", false},         // not in list
+		{"abc124", false},         // similar but different
 	}
 
 	for _, tc := range tests {
@@ -231,11 +231,11 @@ func TestManager_IsBad(t *testing.T) {
 		sha      string
 		expected bool
 	}{
-		{"bad123def456", true},           // exact match
-		{"bad123", true},                 // prefix match
-		{"bad123def456789", true},        // sha is prefix of bad rev
-		{"good123", false},               // different
-		{"bad124", false},                // similar but different
+		{"bad123def456", true},    // exact match
+		{"bad123", true},          // prefix match
+		{"bad123def456789", true}, // sha is prefix of bad rev
+		{"good123", false},        // different
+		{"bad124", false},         // similar but different
 	}
 
 	for _, tc := range tests {
@@ -259,7 +259,7 @@ func TestManager_IsSkipped(t *testing.T) {
 	}{
 		{"skip123", true},
 		{"skip456", true},
-		{"skip12", true},   // prefix
+		{"skip12", true}, // prefix
 		{"other123", false},
 	}
 

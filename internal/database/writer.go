@@ -41,15 +41,15 @@ type SnapshotInfo struct {
 }
 
 type Writer struct {
-	db              *DB
-	branchID        int64
-	commitStmt      *sql.Stmt
+	db               *DB
+	branchID         int64
+	commitStmt       *sql.Stmt
 	branchCommitStmt *sql.Stmt
-	manifestStmt    *sql.Stmt
-	changeStmt      *sql.Stmt
-	snapshotStmt    *sql.Stmt
-	manifestCache   map[string]int64
-	position        int
+	manifestStmt     *sql.Stmt
+	changeStmt       *sql.Stmt
+	snapshotStmt     *sql.Stmt
+	manifestCache    map[string]int64
+	position         int
 }
 
 func NewWriter(db *DB) (*Writer, error) {
@@ -111,13 +111,13 @@ func NewWriter(db *DB) (*Writer, error) {
 	}
 
 	return &Writer{
-		db:              db,
-		commitStmt:      commitStmt,
+		db:               db,
+		commitStmt:       commitStmt,
 		branchCommitStmt: branchCommitStmt,
-		manifestStmt:    manifestStmt,
-		changeStmt:      changeStmt,
-		snapshotStmt:    snapshotStmt,
-		manifestCache:   make(map[string]int64),
+		manifestStmt:     manifestStmt,
+		changeStmt:       changeStmt,
+		snapshotStmt:     snapshotStmt,
+		manifestCache:    make(map[string]int64),
 	}, nil
 }
 

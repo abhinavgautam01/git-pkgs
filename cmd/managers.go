@@ -47,8 +47,8 @@ type lockfileMapping struct {
 type ecosystemConfig struct {
 	Ecosystem string
 	Manifest  string
-	Default   string              // default manager when only manifest exists
-	Lockfiles []lockfileMapping   // in priority order (first match wins)
+	Default   string            // default manager when only manifest exists
+	Lockfiles []lockfileMapping // in priority order (first match wins)
 }
 
 // ecosystems defines detection rules organized by ecosystem/purl type.
@@ -164,7 +164,7 @@ var ecosystemConfigs = []ecosystemConfig{
 	},
 	{
 		Ecosystem: "hackage",
-		Manifest:  "",  // uses suffix match *.cabal
+		Manifest:  "", // uses suffix match *.cabal
 		Default:   "cabal",
 		Lockfiles: []lockfileMapping{
 			{"cabal.project.freeze", "cabal"},

@@ -584,11 +584,11 @@ type NameCount struct {
 }
 
 type AuthorStats struct {
-	Name     string         `json:"name"`
-	Email    string         `json:"email"`
-	Commits  int            `json:"commits"`
-	Changes  int            `json:"changes"`
-	ByType   map[string]int `json:"by_type"`
+	Name    string         `json:"name"`
+	Email   string         `json:"email"`
+	Commits int            `json:"commits"`
+	Changes int            `json:"changes"`
+	ByType  map[string]int `json:"by_type"`
 }
 
 type StatsOptions struct {
@@ -2421,4 +2421,3 @@ func (db *DB) StoreSnapshot(branchID int64, commit CommitInfo, snapshots []Snaps
 
 	return tx.Commit()
 }
-

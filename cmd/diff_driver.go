@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/git-pkgs/manifests"
 	"github.com/git-pkgs/git-pkgs/internal/git"
+	"github.com/git-pkgs/manifests"
 	"github.com/spf13/cobra"
 )
 
