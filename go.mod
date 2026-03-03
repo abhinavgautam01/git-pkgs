@@ -7,7 +7,7 @@ require (
 	github.com/git-pkgs/enrichment v0.1.5
 	github.com/git-pkgs/gitignore v1.1.0
 	github.com/git-pkgs/managers v0.8.0
-	github.com/git-pkgs/manifests v0.4.0
+	github.com/git-pkgs/manifests v0.4.1
 	github.com/git-pkgs/purl v0.1.8
 	github.com/git-pkgs/registries v0.2.6
 	github.com/git-pkgs/resolve v0.1.1
