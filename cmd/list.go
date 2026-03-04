@@ -47,7 +47,7 @@ func runList(cmd *cobra.Command, args []string) error {
 		defer func() { _ = db.Close() }()
 	}
 	if err != nil {
-		return err
+		return fmt.Errorf("listing dependencies: %w", err)
 	}
 
 	// Apply filters
