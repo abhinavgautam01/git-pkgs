@@ -1754,7 +1754,10 @@ func runVulnsExposure(cmd *cobra.Command, args []string) error {
 
 	// Sort by exposure days (longest first)
 	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].ExposureDays > entries[j].ExposureDays
+		if entries[i].ExposureDays != entries[j].ExposureDays {
+			return entries[i].ExposureDays > entries[j].ExposureDays
+		}
+		return entries[i].VulnID < entries[j].VulnID
 	})
 
 	if summary {
@@ -2041,7 +2044,10 @@ func outputPraiseSummary(cmd *cobra.Command, entries []VulnPraiseEntry, format s
 
 	// Sort by total fixes descending
 	sort.Slice(summary.Authors, func(i, j int) bool {
-		return summary.Authors[i].TotalFixes > summary.Authors[j].TotalFixes
+		if summary.Authors[i].TotalFixes != summary.Authors[j].TotalFixes {
+			return summary.Authors[i].TotalFixes > summary.Authors[j].TotalFixes
+		}
+		return summary.Authors[i].Author < summary.Authors[j].Author
 	})
 
 	if format == "json" {

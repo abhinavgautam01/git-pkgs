@@ -150,7 +150,10 @@ func outputStatsText(cmd *cobra.Command, stats *database.Stats) error {
 		ecos = append(ecos, ecoCount{name, count})
 	}
 	sort.Slice(ecos, func(i, j int) bool {
-		return ecos[i].count > ecos[j].count
+		if ecos[i].count != ecos[j].count {
+			return ecos[i].count > ecos[j].count
+		}
+		return ecos[i].name < ecos[j].name
 	})
 	for _, ec := range ecos {
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s: %d\n", ec.name, ec.count)
