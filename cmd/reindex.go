@@ -51,11 +51,14 @@ func runReindex(cmd *cobra.Command, args []string) error {
 		branch = branchInfo.Name
 	}
 
+	_, branchErr := db.GetBranch(branch)
+	incremental := branchErr == nil
+
 	idx := indexer.New(repo, db, indexer.Options{
 		Branch:      branch,
 		Output:      cmd.OutOrStdout(),
 		Quiet:       quiet,
-		Incremental: true,
+		Incremental: incremental,
 	})
 
 	result, err := idx.Run()
@@ -64,7 +67,10 @@ func runReindex(cmd *cobra.Command, args []string) error {
 	}
 
 	if !quiet {
-		if result.CommitsAnalyzed == 0 {
+		if !incremental {
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Added branch %q: %d commits, %d with dependency changes\n",
+				branch, result.CommitsAnalyzed, result.CommitsWithChanges)
+		} else if result.CommitsAnalyzed == 0 {
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Already up to date.")
 		} else {
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\nDone! Analyzed %d new commits, found %d with dependency changes (%d total changes)\n",
