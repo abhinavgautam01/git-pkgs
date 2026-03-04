@@ -365,7 +365,7 @@ func (w *BatchWriter) insertBranchCommits(tx *sql.Tx, commitIDs map[string]int64
 		batch := pending[start:end]
 
 		var sb strings.Builder
-		sb.WriteString("INSERT INTO branch_commits (branch_id, commit_id, position) VALUES ")
+		sb.WriteString("INSERT OR IGNORE INTO branch_commits (branch_id, commit_id, position) VALUES ")
 
 		args := make([]any, 0, len(batch)*columnsPerRow)
 		for i, pc := range batch {
