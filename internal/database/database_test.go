@@ -655,6 +655,52 @@ func TestBatchWriterSharedCommitsMultiManifest(t *testing.T) {
 	}
 }
 
+func TestInsertNoteUpsert(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "pkgs.sqlite3")
+
+	db, err := database.Create(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	note := database.Note{
+		PURL:      "pkg:npm/lodash@4.17.21",
+		Namespace: "default",
+		Message:   "first message",
+	}
+
+	// First insert should work
+	if err := db.InsertNote(note); err != nil {
+		t.Fatalf("first InsertNote failed: %v", err)
+	}
+
+	// Second insert with same purl+namespace should upsert, not fail
+	note.Message = "updated message"
+	if err := db.InsertNote(note); err != nil {
+		t.Fatalf("second InsertNote failed (should upsert): %v", err)
+	}
+
+	// Verify the note was updated
+	got, err := db.GetNote(note.PURL, note.Namespace)
+	if err != nil {
+		t.Fatalf("GetNote failed: %v", err)
+	}
+	if got.Message != "updated message" {
+		t.Errorf("expected 'updated message', got %q", got.Message)
+	}
+
+	// Verify only one note exists
+	notes, err := db.ListNotes("", "")
+	if err != nil {
+		t.Fatalf("ListNotes failed: %v", err)
+	}
+	if len(notes) != 1 {
+		t.Errorf("expected 1 note, got %d", len(notes))
+	}
+}
+
 func TestNewWriterClose(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "pkgs.sqlite3")
