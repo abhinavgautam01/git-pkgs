@@ -227,7 +227,10 @@ func runLicenses(cmd *cobra.Command, args []string) error {
 
 	// Sort by name
 	sort.Slice(licenseInfos, func(i, j int) bool {
-		return licenseInfos[i].Name < licenseInfos[j].Name
+		if licenseInfos[i].Name != licenseInfos[j].Name {
+			return licenseInfos[i].Name < licenseInfos[j].Name
+		}
+		return licenseInfos[i].Version < licenseInfos[j].Version
 	})
 
 	switch format {

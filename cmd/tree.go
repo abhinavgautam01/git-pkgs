@@ -131,7 +131,10 @@ func buildTree(deps []database.Dependency) []*TreeNode {
 
 			// Sort dependencies
 			sort.Slice(typeDeps, func(i, j int) bool {
-				return typeDeps[i].Name < typeDeps[j].Name
+				if typeDeps[i].Name != typeDeps[j].Name {
+					return typeDeps[i].Name < typeDeps[j].Name
+				}
+				return typeDeps[i].Requirement < typeDeps[j].Requirement
 			})
 
 			for _, d := range typeDeps {

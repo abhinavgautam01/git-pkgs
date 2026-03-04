@@ -169,6 +169,9 @@ func runIntegrity(cmd *cobra.Command, args []string) error {
 		if entries[i].Name != entries[j].Name {
 			return entries[i].Name < entries[j].Name
 		}
+		if entries[i].Version != entries[j].Version {
+			return entries[i].Version < entries[j].Version
+		}
 		return entries[i].ManifestPath < entries[j].ManifestPath
 	})
 
