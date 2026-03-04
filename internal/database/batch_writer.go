@@ -199,33 +199,59 @@ func (w *BatchWriter) flushPending(commits []pendingCommit, changes []pendingCha
 
 	now := time.Now()
 
-	// 1. Batch insert commits
+	// 1. Find commits that already exist so we can skip re-inserting their data
+	existingCommits, err := w.getCommitIDs(tx, commits)
+	if err != nil {
+		return fmt.Errorf("getting existing commit IDs: %w", err)
+	}
+
+	// 2. Batch insert commits (OR IGNORE skips existing ones)
 	if err := w.insertCommits(tx, now, commits); err != nil {
 		return fmt.Errorf("inserting commits: %w", err)
 	}
 
-	// 2. Get commit IDs by SHA
+	// 3. Get commit IDs by SHA (now includes newly inserted ones)
 	commitIDs, err := w.getCommitIDs(tx, commits)
 	if err != nil {
 		return fmt.Errorf("getting commit IDs: %w", err)
 	}
 
-	// 3. Batch insert branch_commits
+	// 4. Batch insert branch_commits
 	if err := w.insertBranchCommits(tx, commitIDs, commits); err != nil {
 		return fmt.Errorf("inserting branch commits: %w", err)
 	}
 
-	// 4. Ensure manifests exist and get their IDs
+	// 5. Filter out changes and snapshots for commits that already existed,
+	// since their data is already stored from another branch.
+	if len(existingCommits) > 0 {
+		newChanges := changes[:0]
+		for _, c := range changes {
+			if _, exists := existingCommits[c.sha]; !exists {
+				newChanges = append(newChanges, c)
+			}
+		}
+		changes = newChanges
+
+		newSnapshots := snapshots[:0]
+		for _, s := range snapshots {
+			if _, exists := existingCommits[s.sha]; !exists {
+				newSnapshots = append(newSnapshots, s)
+			}
+		}
+		snapshots = newSnapshots
+	}
+
+	// 6. Ensure manifests exist and get their IDs
 	if err := w.ensureManifests(tx, now, changes, snapshots); err != nil {
 		return fmt.Errorf("ensuring manifests: %w", err)
 	}
 
-	// 5. Batch insert changes
+	// 7. Batch insert changes
 	if err := w.insertChanges(tx, commitIDs, now, changes); err != nil {
 		return fmt.Errorf("inserting changes: %w", err)
 	}
 
-	// 6. Batch insert snapshots
+	// 8. Batch insert snapshots
 	if err := w.insertSnapshots(tx, commitIDs, now, snapshots); err != nil {
 		return fmt.Errorf("inserting snapshots: %w", err)
 	}
@@ -253,7 +279,7 @@ func (w *BatchWriter) insertCommits(tx *sql.Tx, now time.Time, pending []pending
 		batch := pending[start:end]
 
 		var sb strings.Builder
-		sb.WriteString("INSERT INTO commits (sha, message, author_name, author_email, committed_at, has_dependency_changes, created_at, updated_at) VALUES ")
+		sb.WriteString("INSERT OR IGNORE INTO commits (sha, message, author_name, author_email, committed_at, has_dependency_changes, created_at, updated_at) VALUES ")
 
 		args := make([]any, 0, len(batch)*columnsPerRow)
 		for i, pc := range batch {
@@ -490,7 +516,7 @@ func (w *BatchWriter) insertSnapshots(tx *sql.Tx, commitIDs map[string]int64, no
 		batch := pending[start:end]
 
 		var sb strings.Builder
-		sb.WriteString("INSERT INTO dependency_snapshots (commit_id, manifest_id, name, ecosystem, purl, requirement, dependency_type, integrity, created_at, updated_at) VALUES ")
+		sb.WriteString("INSERT OR IGNORE INTO dependency_snapshots (commit_id, manifest_id, name, ecosystem, purl, requirement, dependency_type, integrity, created_at, updated_at) VALUES ")
 
 		args := make([]any, 0, len(batch)*columnsPerRow)
 		for i, ps := range batch {
