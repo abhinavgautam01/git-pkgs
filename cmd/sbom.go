@@ -138,7 +138,7 @@ func runSBOM(cmd *cobra.Command, args []string) error {
 		defer func() { _ = db.Close() }()
 	}
 	if err != nil {
-		return err
+		return fmt.Errorf("loading dependencies: %w", err)
 	}
 
 	deps = filterByEcosystem(deps, ecosystem)
