@@ -12,7 +12,7 @@ require (
 	github.com/git-pkgs/registries v0.3.0
 	github.com/git-pkgs/resolve v0.1.1
 	github.com/git-pkgs/spdx v0.1.1
-	github.com/git-pkgs/vers v0.2.2
+	github.com/git-pkgs/vers v0.2.3
 	github.com/git-pkgs/vulns v0.1.3
 	github.com/go-git/go-git/v5 v5.16.5
 	github.com/mattn/go-isatty v0.0.20
