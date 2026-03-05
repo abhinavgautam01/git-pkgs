@@ -2023,6 +2023,11 @@ func (db *DB) InsertNote(note Note) error {
 	_, err := db.Exec(`
 		INSERT INTO notes (purl, namespace, origin, message, metadata, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(purl, namespace) DO UPDATE SET
+			message = excluded.message,
+			metadata = excluded.metadata,
+			origin = excluded.origin,
+			updated_at = excluded.updated_at
 	`, note.PURL, note.Namespace, origin, note.Message, metadataJSON, now, now)
 	return err
 }
