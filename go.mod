@@ -8,7 +8,7 @@ require (
 	github.com/git-pkgs/gitignore v1.1.0
 	github.com/git-pkgs/managers v0.8.0
 	github.com/git-pkgs/manifests v0.4.1
-	github.com/git-pkgs/purl v0.1.8
+	github.com/git-pkgs/purl v0.1.9
 	github.com/git-pkgs/registries v0.3.0
 	github.com/git-pkgs/resolve v0.1.1
 	github.com/git-pkgs/spdx v0.1.1
