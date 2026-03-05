@@ -1276,8 +1276,8 @@ func (db *DB) GetPackageHistory(opts HistoryOptions) ([]HistoryEntry, error) {
 	args := []any{opts.BranchID}
 
 	if opts.PackageName != "" {
-		query += " AND dc.name LIKE ?"
-		args = append(args, "%"+opts.PackageName+"%")
+		query += " AND dc.name = ?"
+		args = append(args, opts.PackageName)
 	}
 	if opts.Ecosystem != "" {
 		query += " AND dc.ecosystem = ?"
