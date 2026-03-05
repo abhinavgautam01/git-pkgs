@@ -196,10 +196,13 @@ func convertLockfile(cmd *cobra.Command, filePath string) error {
 		return nil
 	}
 
-	// Sort dependencies by name
+	// Sort dependencies by name, then version for deterministic output
 	deps := result.Dependencies
 	sort.Slice(deps, func(i, j int) bool {
-		return deps[i].Name < deps[j].Name
+		if deps[i].Name != deps[j].Name {
+			return deps[i].Name < deps[j].Name
+		}
+		return deps[i].Version < deps[j].Version
 	})
 
 	// Output sorted list

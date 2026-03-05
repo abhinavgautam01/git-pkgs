@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -369,5 +370,50 @@ func TestBuildVersRange(t *testing.T) {
 				t.Errorf("buildVersRange() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestExposureSortDeterministic(t *testing.T) {
+	entries := []VulnExposureEntry{
+		{VulnID: "GHSA-0003", ExposureDays: 10},
+		{VulnID: "GHSA-0001", ExposureDays: 10},
+		{VulnID: "GHSA-0002", ExposureDays: 10},
+		{VulnID: "GHSA-0004", ExposureDays: 30},
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].ExposureDays != entries[j].ExposureDays {
+			return entries[i].ExposureDays > entries[j].ExposureDays
+		}
+		return entries[i].VulnID < entries[j].VulnID
+	})
+
+	want := []string{"GHSA-0004", "GHSA-0001", "GHSA-0002", "GHSA-0003"}
+	for i, id := range want {
+		if entries[i].VulnID != id {
+			t.Errorf("entries[%d].VulnID = %q, want %q", i, entries[i].VulnID, id)
+		}
+	}
+}
+
+func TestPraiseSortDeterministic(t *testing.T) {
+	authors := []PraiseAuthorSummary{
+		{Author: "charlie", TotalFixes: 5},
+		{Author: "alice", TotalFixes: 5},
+		{Author: "bob", TotalFixes: 10},
+	}
+
+	sort.Slice(authors, func(i, j int) bool {
+		if authors[i].TotalFixes != authors[j].TotalFixes {
+			return authors[i].TotalFixes > authors[j].TotalFixes
+		}
+		return authors[i].Author < authors[j].Author
+	})
+
+	want := []string{"bob", "alice", "charlie"}
+	for i, name := range want {
+		if authors[i].Author != name {
+			t.Errorf("authors[%d].Author = %q, want %q", i, authors[i].Author, name)
+		}
 	}
 }
