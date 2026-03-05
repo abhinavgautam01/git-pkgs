@@ -14,7 +14,7 @@ require (
 	github.com/git-pkgs/spdx v0.1.1
 	github.com/git-pkgs/vers v0.2.2
 	github.com/git-pkgs/vulns v0.1.3
-	github.com/go-git/go-git/v5 v5.16.5
+	github.com/go-git/go-git/v5 v5.17.0
 	github.com/mattn/go-isatty v0.0.20
 	github.com/spf13/cobra v1.10.2
 	modernc.org/sqlite v1.46.1
@@ -96,7 +96,7 @@ require (
 	github.com/github/go-spdx/v2 v2.4.0 // indirect
 	github.com/go-critic/go-critic v0.14.3 // indirect
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect
-	github.com/go-git/go-billy/v5 v5.7.0 // indirect
+	github.com/go-git/go-billy/v5 v5.8.0 // indirect
 	github.com/go-toolsmith/astcast v1.1.0 // indirect
 	github.com/go-toolsmith/astcopy v1.1.0 // indirect
 	github.com/go-toolsmith/astequal v1.2.0 // indirect
