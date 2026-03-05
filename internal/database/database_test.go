@@ -459,6 +459,202 @@ func TestGetDependenciesAtCommit(t *testing.T) {
 	}
 }
 
+func TestBatchWriterSharedCommits(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "pkgs.sqlite3")
+
+	db, err := database.Create(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	sharedSHA := "shared123"
+	sharedCommit := database.CommitInfo{
+		SHA:     sharedSHA,
+		Message: "shared commit",
+	}
+	manifest := database.ManifestInfo{
+		Path:      "package-lock.json",
+		Ecosystem: "npm",
+		Kind:      "lockfile",
+	}
+	change := database.ChangeInfo{
+		Name:       "lodash",
+		Ecosystem:  "npm",
+		ChangeType: "added",
+	}
+	snapshot := database.SnapshotInfo{
+		ManifestPath: "package-lock.json",
+		Name:         "lodash",
+		Ecosystem:    "npm",
+		Requirement:  "4.17.21",
+	}
+
+	// Index shared commit on branch "main"
+	w1 := database.NewBatchWriter(db)
+	if err := w1.CreateBranch("main"); err != nil {
+		t.Fatalf("failed to create main branch: %v", err)
+	}
+	w1.AddCommit(sharedCommit, true)
+	w1.IncrementDepCommitCount()
+	w1.AddChange(sharedSHA, manifest, change)
+	w1.AddSnapshot(sharedSHA, manifest, snapshot)
+	if err := w1.Flush(); err != nil {
+		t.Fatalf("flush on main failed: %v", err)
+	}
+
+	// Index the same commit on branch "feature" — should not fail
+	w2 := database.NewBatchWriter(db)
+	if err := w2.CreateBranch("feature"); err != nil {
+		t.Fatalf("failed to create feature branch: %v", err)
+	}
+	w2.AddCommit(sharedCommit, true)
+	w2.IncrementDepCommitCount()
+	w2.AddChange(sharedSHA, manifest, change)
+	w2.AddSnapshot(sharedSHA, manifest, snapshot)
+	if err := w2.Flush(); err != nil {
+		t.Fatalf("flush on feature failed: %v", err)
+	}
+
+	// Verify the commit is linked to both branches
+	var branchCount int
+	err = db.QueryRow("SELECT COUNT(*) FROM branch_commits WHERE commit_id = (SELECT id FROM commits WHERE sha = ?)", sharedSHA).Scan(&branchCount)
+	if err != nil {
+		t.Fatalf("failed to count branch_commits: %v", err)
+	}
+	if branchCount != 2 {
+		t.Errorf("expected commit linked to 2 branches, got %d", branchCount)
+	}
+
+	// Verify no duplicate dependency_changes
+	var changeCount int
+	err = db.QueryRow("SELECT COUNT(*) FROM dependency_changes WHERE name = 'lodash'").Scan(&changeCount)
+	if err != nil {
+		t.Fatalf("failed to count changes: %v", err)
+	}
+	if changeCount != 1 {
+		t.Errorf("expected 1 change row, got %d", changeCount)
+	}
+}
+
+func TestBatchWriterSharedCommitsMultiManifest(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "pkgs.sqlite3")
+
+	db, err := database.Create(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	sharedSHA := "multi456"
+	sharedCommit := database.CommitInfo{
+		SHA:     sharedSHA,
+		Message: "add npm and pip deps",
+	}
+	npmManifest := database.ManifestInfo{
+		Path:      "package-lock.json",
+		Ecosystem: "npm",
+		Kind:      "lockfile",
+	}
+	pipManifest := database.ManifestInfo{
+		Path:      "Pipfile.lock",
+		Ecosystem: "pip",
+		Kind:      "lockfile",
+	}
+	npmChange := database.ChangeInfo{
+		Name:       "express",
+		Ecosystem:  "npm",
+		ChangeType: "added",
+	}
+	pipChange := database.ChangeInfo{
+		Name:       "requests",
+		Ecosystem:  "pip",
+		ChangeType: "added",
+	}
+	npmSnapshot := database.SnapshotInfo{
+		ManifestPath: "package-lock.json",
+		Name:         "express",
+		Ecosystem:    "npm",
+		Requirement:  "4.18.0",
+	}
+	pipSnapshot := database.SnapshotInfo{
+		ManifestPath: "Pipfile.lock",
+		Name:         "requests",
+		Ecosystem:    "pip",
+		Requirement:  "2.31.0",
+	}
+
+	// Index on main with both manifests
+	w1 := database.NewBatchWriter(db)
+	if err := w1.CreateBranch("main"); err != nil {
+		t.Fatalf("failed to create main branch: %v", err)
+	}
+	w1.AddCommit(sharedCommit, true)
+	w1.IncrementDepCommitCount()
+	w1.AddChange(sharedSHA, npmManifest, npmChange)
+	w1.AddChange(sharedSHA, pipManifest, pipChange)
+	w1.AddSnapshot(sharedSHA, npmManifest, npmSnapshot)
+	w1.AddSnapshot(sharedSHA, pipManifest, pipSnapshot)
+	if err := w1.Flush(); err != nil {
+		t.Fatalf("flush on main failed: %v", err)
+	}
+
+	// Index same commit on feature — should not fail
+	w2 := database.NewBatchWriter(db)
+	if err := w2.CreateBranch("feature"); err != nil {
+		t.Fatalf("failed to create feature branch: %v", err)
+	}
+	w2.AddCommit(sharedCommit, true)
+	w2.IncrementDepCommitCount()
+	w2.AddChange(sharedSHA, npmManifest, npmChange)
+	w2.AddChange(sharedSHA, pipManifest, pipChange)
+	w2.AddSnapshot(sharedSHA, npmManifest, npmSnapshot)
+	w2.AddSnapshot(sharedSHA, pipManifest, pipSnapshot)
+	if err := w2.Flush(); err != nil {
+		t.Fatalf("flush on feature failed: %v", err)
+	}
+
+	// Commit linked to both branches
+	var branchCount int
+	err = db.QueryRow("SELECT COUNT(*) FROM branch_commits WHERE commit_id = (SELECT id FROM commits WHERE sha = ?)", sharedSHA).Scan(&branchCount)
+	if err != nil {
+		t.Fatalf("failed to count branch_commits: %v", err)
+	}
+	if branchCount != 2 {
+		t.Errorf("expected commit linked to 2 branches, got %d", branchCount)
+	}
+
+	// Exactly 2 change rows (one per manifest, not duplicated)
+	var changeCount int
+	err = db.QueryRow("SELECT COUNT(*) FROM dependency_changes").Scan(&changeCount)
+	if err != nil {
+		t.Fatalf("failed to count changes: %v", err)
+	}
+	if changeCount != 2 {
+		t.Errorf("expected 2 change rows (npm + pip), got %d", changeCount)
+	}
+
+	// Exactly 2 snapshot rows (one per manifest, not duplicated)
+	var snapCount int
+	err = db.QueryRow("SELECT COUNT(*) FROM dependency_snapshots").Scan(&snapCount)
+	if err != nil {
+		t.Fatalf("failed to count snapshots: %v", err)
+	}
+	if snapCount != 2 {
+		t.Errorf("expected 2 snapshot rows (npm + pip), got %d", snapCount)
+	}
+
+	// Verify both ecosystems present in snapshots
+	var npmSnapCount, pipSnapCount int
+	_ = db.QueryRow("SELECT COUNT(*) FROM dependency_snapshots WHERE ecosystem = 'npm'").Scan(&npmSnapCount)
+	_ = db.QueryRow("SELECT COUNT(*) FROM dependency_snapshots WHERE ecosystem = 'pip'").Scan(&pipSnapCount)
+	if npmSnapCount != 1 || pipSnapCount != 1 {
+		t.Errorf("expected 1 npm and 1 pip snapshot, got npm=%d pip=%d", npmSnapCount, pipSnapCount)
+	}
+}
+
 func TestNewWriterClose(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "pkgs.sqlite3")

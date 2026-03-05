@@ -79,7 +79,7 @@ func NewWriter(db *DB) (*Writer, error) {
 	}
 
 	branchCommitStmt, err := prepare(`
-		INSERT INTO branch_commits (branch_id, commit_id, position)
+		INSERT OR IGNORE INTO branch_commits (branch_id, commit_id, position)
 		VALUES (?, ?, ?)
 	`)
 	if err != nil {
@@ -103,7 +103,7 @@ func NewWriter(db *DB) (*Writer, error) {
 	}
 
 	snapshotStmt, err := prepare(`
-		INSERT INTO dependency_snapshots (commit_id, manifest_id, name, ecosystem, purl, requirement, dependency_type, integrity, created_at, updated_at)
+		INSERT OR IGNORE INTO dependency_snapshots (commit_id, manifest_id, name, ecosystem, purl, requirement, dependency_type, integrity, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
