@@ -60,7 +60,8 @@ func runChangelog(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("could not build PURL for %s/%s", ecosystem, pkg)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	const changelogTimeout = 30 * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), changelogTimeout)
 	defer cancel()
 
 	client, err := enrichment.NewClient(enrichment.WithUserAgent("git-pkgs/" + version))

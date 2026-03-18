@@ -92,7 +92,7 @@ func runIntegrity(cmd *cobra.Command, args []string) error {
 	// Filter to lockfile deps with integrity hashes
 	var lockfileDeps []database.Dependency
 	for _, d := range deps {
-		if d.ManifestKind == "lockfile" && d.Integrity != "" {
+		if d.ManifestKind == manifestKindLockfile && d.Integrity != "" {
 			lockfileDeps = append(lockfileDeps, d)
 		}
 	}
@@ -175,7 +175,7 @@ func runIntegrity(cmd *cobra.Command, args []string) error {
 		return entries[i].ManifestPath < entries[j].ManifestPath
 	})
 
-	if format == "json" {
+	if format == formatJSON {
 		if driftOnly {
 			return outputDriftJSON(cmd, drifts)
 		}
@@ -183,9 +183,11 @@ func runIntegrity(cmd *cobra.Command, args []string) error {
 	}
 
 	if driftOnly {
-		return outputDriftText(cmd, drifts)
+		outputDriftText(cmd, drifts)
+		return nil
 	}
-	return outputIntegrityText(cmd, entries)
+	outputIntegrityText(cmd, entries)
+	return nil
 }
 
 func outputIntegrityJSON(cmd *cobra.Command, entries []IntegrityEntry) error {
@@ -200,7 +202,7 @@ func outputDriftJSON(cmd *cobra.Command, drifts []IntegrityDrift) error {
 	return enc.Encode(drifts)
 }
 
-func outputIntegrityText(cmd *cobra.Command, entries []IntegrityEntry) error {
+func outputIntegrityText(cmd *cobra.Command, entries []IntegrityEntry) {
 	// Group by manifest path
 	byManifest := make(map[string][]IntegrityEntry)
 	for _, e := range entries {
@@ -219,8 +221,8 @@ func outputIntegrityText(cmd *cobra.Command, entries []IntegrityEntry) error {
 
 		for _, e := range byManifest[path] {
 			hash := e.Integrity
-			if len(hash) > 40 {
-				hash = hash[:40] + "..."
+			if len(hash) > shaHashLen {
+				hash = hash[:shaHashLen] + "..."
 			}
 			line := fmt.Sprintf("  %s@%s  %s", e.Name, e.Version, hash)
 			if e.HasDrift {
@@ -230,14 +232,12 @@ func outputIntegrityText(cmd *cobra.Command, entries []IntegrityEntry) error {
 		}
 		_, _ = fmt.Fprintln(cmd.OutOrStdout())
 	}
-
-	return nil
 }
 
-func outputDriftText(cmd *cobra.Command, drifts []IntegrityDrift) error {
+func outputDriftText(cmd *cobra.Command, drifts []IntegrityDrift) {
 	if len(drifts) == 0 {
 		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No integrity drift detected.")
-		return nil
+		return
 	}
 
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Found %d packages with integrity drift:\n\n", len(drifts))
@@ -245,22 +245,20 @@ func outputDriftText(cmd *cobra.Command, drifts []IntegrityDrift) error {
 	for _, d := range drifts {
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s@%s (%s)\n", d.Name, d.Version, d.Ecosystem)
 		for manifest, hash := range d.Hashes {
-			if len(hash) > 40 {
-				hash = hash[:40] + "..."
+			if len(hash) > shaHashLen {
+				hash = hash[:shaHashLen] + "..."
 			}
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s: %s\n", manifest, hash)
 		}
 		_, _ = fmt.Fprintln(cmd.OutOrStdout())
 	}
-
-	return nil
 }
 
 func runRegistryCheck(cmd *cobra.Command, deps []database.Dependency, format string) error {
 	// Filter to lockfile deps with integrity hashes
 	var lockfileDeps []database.Dependency
 	for _, d := range deps {
-		if d.ManifestKind == "lockfile" && d.Integrity != "" && d.Requirement != "" {
+		if d.ManifestKind == manifestKindLockfile && d.Integrity != "" && d.Requirement != "" {
 			lockfileDeps = append(lockfileDeps, d)
 		}
 	}
@@ -276,7 +274,8 @@ func runRegistryCheck(cmd *cobra.Command, deps []database.Dependency, format str
 		return fmt.Errorf("creating enrichment client: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	const registryCheckTimeout = 120 * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), registryCheckTimeout)
 	defer cancel()
 
 	// Check each dependency against registry
@@ -330,7 +329,7 @@ func runRegistryCheck(cmd *cobra.Command, deps []database.Dependency, format str
 		}
 	}
 
-	if format == "json" {
+	if format == formatJSON {
 		return outputRegistryMismatchJSON(cmd, mismatches, checked, skipped)
 	}
 	return outputRegistryMismatchText(cmd, mismatches, checked, skipped)
@@ -408,12 +407,12 @@ func outputRegistryMismatchText(cmd *cobra.Command, mismatches []RegistryMismatc
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Manifest: %s\n", m.ManifestPath)
 
 		localHash := m.LocalHash
-		if len(localHash) > 50 {
-			localHash = localHash[:50] + "..."
+		if len(localHash) > hashDisplayLen {
+			localHash = localHash[:hashDisplayLen] + "..."
 		}
 		registryHash := m.RegistryHash
-		if len(registryHash) > 50 {
-			registryHash = registryHash[:50] + "..."
+		if len(registryHash) > hashDisplayLen {
+			registryHash = registryHash[:hashDisplayLen] + "..."
 		}
 
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Local:    %s\n", Red(localHash))

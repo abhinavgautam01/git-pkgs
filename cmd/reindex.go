@@ -84,12 +84,13 @@ func reindexBranch(cmd *cobra.Command, repo *git.Repository, db *database.DB, br
 	}
 
 	if !quiet {
-		if !incremental {
+		switch {
+		case !incremental:
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Added branch %q: %d commits, %d with dependency changes\n",
 				branch, result.CommitsAnalyzed, result.CommitsWithChanges)
-		} else if result.CommitsAnalyzed == 0 {
+		case result.CommitsAnalyzed == 0:
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s: up to date\n", branch)
-		} else {
+		default:
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s: %d new commits, %d with dependency changes\n",
 				branch, result.CommitsAnalyzed, result.CommitsWithChanges)
 		}

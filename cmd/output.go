@@ -30,7 +30,6 @@ const (
 	colorRed    = "\033[31m"
 	colorGreen  = "\033[32m"
 	colorYellow = "\033[33m"
-	colorBlue   = "\033[34m"
 	colorCyan   = "\033[36m"
 	colorBold   = "\033[1m"
 	colorDim    = "\033[2m"
@@ -107,11 +106,6 @@ func Yellow(text string) string {
 	return Colorize(text, colorYellow)
 }
 
-// Blue returns text in blue
-func Blue(text string) string {
-	return Colorize(text, colorBlue)
-}
-
 // Cyan returns text in cyan
 func Cyan(text string) string {
 	return Colorize(text, colorCyan)
@@ -153,7 +147,7 @@ func GetPager() string {
 		return pager
 	}
 	// Default pagers
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == osWindows {
 		return "more"
 	}
 	if _, err := exec.LookPath("less"); err == nil {
@@ -189,7 +183,7 @@ func SetupPager(cmd *cobra.Command) func() {
 
 	// Start pager process
 	var pager *exec.Cmd
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == osWindows {
 		pager = exec.Command("cmd", "/c", pagerCmd)
 	} else {
 		pager = exec.Command("sh", "-c", pagerCmd)

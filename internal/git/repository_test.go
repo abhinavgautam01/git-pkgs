@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/git-pkgs/git-pkgs/internal/git"
-	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
 func createTestRepo(t *testing.T) string {
@@ -229,66 +228,6 @@ func TestCommitObject(t *testing.T) {
 	}
 	if !strings.Contains(c.Message, "Initial commit") {
 		t.Errorf("expected message to contain 'Initial commit', got %s", c.Message)
-	}
-}
-
-func TestFileAtCommit(t *testing.T) {
-	repoDir := createTestRepo(t)
-	addFile(t, repoDir, "README.md", "# Test Project")
-	sha := commit(t, repoDir, "Initial commit")
-
-	repo, err := git.OpenRepository(repoDir)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	hash, _ := repo.ResolveRevision(sha)
-	c, _ := repo.CommitObject(*hash)
-
-	content, err := repo.FileAtCommit(c, "README.md")
-	if err != nil {
-		t.Fatalf("failed to get file: %v", err)
-	}
-
-	if content != "# Test Project" {
-		t.Errorf("expected '# Test Project', got %s", content)
-	}
-}
-
-func TestLog(t *testing.T) {
-	repoDir := createTestRepo(t)
-
-	addFile(t, repoDir, "README.md", "# Test")
-	commit(t, repoDir, "First commit")
-
-	addFile(t, repoDir, "file.txt", "content")
-	commit(t, repoDir, "Second commit")
-
-	addFile(t, repoDir, "file.txt", "updated content")
-	commit(t, repoDir, "Third commit")
-
-	repo, err := git.OpenRepository(repoDir)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	hash, _ := repo.ResolveRevision("HEAD")
-	iter, err := repo.Log(*hash)
-	if err != nil {
-		t.Fatalf("failed to get log: %v", err)
-	}
-
-	var count int
-	err = iter.ForEach(func(c *object.Commit) error {
-		count++
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("failed to iterate: %v", err)
-	}
-
-	if count != 3 {
-		t.Errorf("expected 3 commits, got %d", count)
 	}
 }
 
@@ -542,52 +481,6 @@ func TestGetSubmodulePaths(t *testing.T) {
 		}
 		if !pathMap["external/tool"] {
 			t.Errorf("expected submodule path 'external/tool', got %v", paths)
-		}
-	})
-}
-
-func TestGetExcludeDirs(t *testing.T) {
-	t.Run("returns defaults when config is unset", func(t *testing.T) {
-		dir := createTestRepo(t)
-		addFile(t, dir, "README.md", "# Test")
-		commit(t, dir, "init")
-
-		repo, err := git.OpenRepository(dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		dirs := repo.GetExcludeDirs()
-		if len(dirs) != 2 || dirs[0] != "node_modules" || dirs[1] != "vendor" {
-			t.Errorf("expected [node_modules vendor], got %v", dirs)
-		}
-	})
-
-	t.Run("reads from git config", func(t *testing.T) {
-		dir := createTestRepo(t)
-		addFile(t, dir, "README.md", "# Test")
-		commit(t, dir, "init")
-
-		cmd := exec.Command("git", "config", "git-pkgs.exclude-dirs", "dist,build,tmp")
-		cmd.Dir = dir
-		if err := cmd.Run(); err != nil {
-			t.Fatalf("failed to set config: %v", err)
-		}
-
-		repo, err := git.OpenRepository(dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		dirs := repo.GetExcludeDirs()
-		expected := []string{"dist", "build", "tmp"}
-		if len(dirs) != len(expected) {
-			t.Fatalf("expected %v, got %v", expected, dirs)
-		}
-		for i, d := range dirs {
-			if d != expected[i] {
-				t.Errorf("dirs[%d] = %q, want %q", i, d, expected[i])
-			}
 		}
 	})
 }

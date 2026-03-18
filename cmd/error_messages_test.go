@@ -1,6 +1,7 @@
 package cmd_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -30,7 +31,7 @@ func TestErrorMessagesWrapped(t *testing.T) {
 			}
 
 			// Run the command pointing at a bad ref
-			args := append(tc.args, "--commit", "deadbeef1234567890deadbeef1234567890dead")
+			args := slices.Concat(tc.args, []string{"--commit", "deadbeef1234567890deadbeef1234567890dead"})
 			_, _, err = runCmd(t, args...)
 			if err == nil {
 				t.Skip("command succeeded unexpectedly")

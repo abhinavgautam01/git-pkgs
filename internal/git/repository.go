@@ -90,31 +90,6 @@ func (r *Repository) CommitObject(hash plumbing.Hash) (*object.Commit, error) {
 	return r.repo.CommitObject(hash)
 }
 
-func (r *Repository) Log(from plumbing.Hash) (object.CommitIter, error) {
-	return r.repo.Log(&git.LogOptions{
-		From:  from,
-		Order: git.LogOrderCommitterTime,
-	})
-}
-
-func (r *Repository) TreeAtCommit(commit *object.Commit) (*object.Tree, error) {
-	return commit.Tree()
-}
-
-func (r *Repository) FileAtCommit(commit *object.Commit, path string) (string, error) {
-	tree, err := commit.Tree()
-	if err != nil {
-		return "", err
-	}
-
-	file, err := tree.File(path)
-	if err != nil {
-		return "", err
-	}
-
-	return file.Contents()
-}
-
 // Tags returns a map of commit SHA to tag names for all tags in the repository.
 func (r *Repository) Tags() (map[string][]string, error) {
 	result := make(map[string][]string)
@@ -163,30 +138,6 @@ func (r *Repository) LocalBranches() (map[string][]string, error) {
 	}
 
 	return result, nil
-}
-
-// GetExcludeDirs returns directories to skip during walking, read from
-// git config git-pkgs.exclude-dirs. Defaults to "node_modules,vendor" if unset.
-func (r *Repository) GetExcludeDirs() []string {
-	cmd := exec.Command("git", "config", "git-pkgs.exclude-dirs")
-	cmd.Dir = r.workDir
-	out, err := cmd.Output()
-	if err != nil {
-		return []string{"node_modules", "vendor"}
-	}
-	val := strings.TrimSpace(string(out))
-	if val == "" {
-		return []string{"node_modules", "vendor"}
-	}
-	parts := strings.Split(val, ",")
-	dirs := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			dirs = append(dirs, p)
-		}
-	}
-	return dirs
 }
 
 // GetSubmodulePaths returns a list of submodule paths using go-git's submodule support.

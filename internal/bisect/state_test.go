@@ -92,9 +92,8 @@ func TestManager_Clean(t *testing.T) {
 	if err := mgr.AppendLog("test log entry"); err != nil {
 		t.Fatalf("failed to append log: %v", err)
 	}
-	candidates := []Candidate{{SHA: "abc123", Message: "test"}}
-	if err := mgr.SaveCandidates(candidates); err != nil {
-		t.Fatalf("failed to save candidates: %v", err)
+	if err := os.WriteFile(filepath.Join(tmpDir, candidatesFile), []byte(`[{"sha":"abc123","message":"test"}]`), 0644); err != nil {
+		t.Fatalf("failed to write candidates file: %v", err)
 	}
 
 	// Verify files exist
@@ -153,41 +152,6 @@ func TestManager_Log(t *testing.T) {
 	for i, entry := range entries {
 		if i < len(lines) && lines[i] != entry {
 			t.Errorf("log entry %d: expected %q, got %q", i, entry, lines[i])
-		}
-	}
-}
-
-func TestManager_Candidates(t *testing.T) {
-	tmpDir := t.TempDir()
-	mgr := NewManager(tmpDir)
-
-	candidates := []Candidate{
-		{SHA: "abc123", Message: "First commit"},
-		{SHA: "def456", Message: "Second commit"},
-		{SHA: "ghi789", Message: "Third commit"},
-	}
-
-	if err := mgr.SaveCandidates(candidates); err != nil {
-		t.Fatalf("failed to save candidates: %v", err)
-	}
-
-	loaded, err := mgr.LoadCandidates()
-	if err != nil {
-		t.Fatalf("failed to load candidates: %v", err)
-	}
-
-	if len(loaded) != len(candidates) {
-		t.Errorf("expected %d candidates, got %d", len(candidates), len(loaded))
-	}
-
-	for i, c := range candidates {
-		if i < len(loaded) {
-			if loaded[i].SHA != c.SHA {
-				t.Errorf("candidate %d SHA: expected %q, got %q", i, c.SHA, loaded[i].SHA)
-			}
-			if loaded[i].Message != c.Message {
-				t.Errorf("candidate %d Message: expected %q, got %q", i, c.Message, loaded[i].Message)
-			}
 		}
 	}
 }

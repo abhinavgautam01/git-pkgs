@@ -88,18 +88,6 @@ func (a *Analyzer) ClearBlobCache() {
 	a.blobCache = make(map[string]*manifests.ParseResult)
 }
 
-// BlobCacheLen returns the current number of entries in the blob cache.
-func (a *Analyzer) BlobCacheLen() int {
-	return len(a.blobCache)
-}
-
-// DiffCacheLen returns the current number of entries in the diff cache.
-func (a *Analyzer) DiffCacheLen() int {
-	a.diffMu.RLock()
-	defer a.diffMu.RUnlock()
-	return len(a.diffCache)
-}
-
 // ClearDiffCache replaces the diffCache with a fresh empty map,
 // allowing the GC to reclaim all cached diff entries.
 func (a *Analyzer) ClearDiffCache() {

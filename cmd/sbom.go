@@ -211,7 +211,8 @@ func getSBOMLicenseData(db *database.DB, purls []string, purlToDep map[string]da
 			return nil, err
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		const sbomTimeout = 60 * time.Second
+		ctx, cancel := context.WithTimeout(context.Background(), sbomTimeout)
 		defer cancel()
 
 		packages, err := client.BulkLookup(ctx, uncachedPurls)
