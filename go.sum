@@ -215,8 +215,8 @@ github.com/ghostiam/protogetter v0.3.20 h1:oW7OPFit2FxZOpmMRPP9FffU4uUpfeE/rEdE1
 github.com/ghostiam/protogetter v0.3.20/go.mod h1:FjIu5Yfs6FT391m+Fjp3fbAYJ6rkL/J6ySpZBfnODuI=
 github.com/git-pkgs/changelog v0.1.1 h1:hGEraBDgwUUQfwV8y6MVS+QywbpcYNAFVtg25LfCnIM=
 github.com/git-pkgs/changelog v0.1.1/go.mod h1:psv6VJyJKYzDYajKdV9oPw7LUEOIqSiB0L3wcKdX6Ac=
-github.com/git-pkgs/enrichment v0.1.5 h1:xhZkQMciofrPPrDtVRQqz+suRmKTtk53ibSUYCYviCI=
-github.com/git-pkgs/enrichment v0.1.5/go.mod h1:5LB52Ei3cUI4LqLkshpMfxcSguwWT5L3exv+erfIcNI=
+github.com/git-pkgs/enrichment v0.2.1 h1:mJJt4YQBzl9aOfu4226ylnC9H6YO9YZDjGpbSPVahKc=
+github.com/git-pkgs/enrichment v0.2.1/go.mod h1:q9eDZpRrUbYwzD4Mtg/T6LRdBMlt2DYRIvVRDULFnKg=
 github.com/git-pkgs/gitignore v1.1.0 h1:oEFBmITV1H6TsmcguHCSpgJP0iGe+TgaSZ/p6H10x1I=
 github.com/git-pkgs/gitignore v1.1.0/go.mod h1:Lr0XwhbvP071rZF/zIIhkY1gEhFDoWHH91lngwLpeUg=
 github.com/git-pkgs/managers v0.8.1 h1:8Xt9o+QxnGzxntOlS95xHupVYLobZIHHGdHBjhS13ro=
