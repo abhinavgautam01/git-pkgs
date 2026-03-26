@@ -4,7 +4,7 @@ go 1.25.7
 
 require (
 	github.com/git-pkgs/changelog v0.1.1
-	github.com/git-pkgs/enrichment v0.1.5
+	github.com/git-pkgs/enrichment v0.2.1
 	github.com/git-pkgs/gitignore v1.1.0
 	github.com/git-pkgs/managers v0.8.1
 	github.com/git-pkgs/manifests v0.4.2
