@@ -3,17 +3,17 @@ module github.com/git-pkgs/git-pkgs
 go 1.25.7
 
 require (
-	github.com/git-pkgs/changelog v0.1.1
+	github.com/git-pkgs/changelog v0.1.2
 	github.com/git-pkgs/enrichment v0.2.1
 	github.com/git-pkgs/gitignore v1.1.0
-	github.com/git-pkgs/managers v0.8.1
-	github.com/git-pkgs/manifests v0.4.2
-	github.com/git-pkgs/purl v0.1.9
-	github.com/git-pkgs/registries v0.3.0
-	github.com/git-pkgs/resolve v0.1.1
-	github.com/git-pkgs/spdx v0.1.1
-	github.com/git-pkgs/vers v0.2.3
-	github.com/git-pkgs/vulns v0.1.3
+	github.com/git-pkgs/managers v0.8.2
+	github.com/git-pkgs/manifests v0.4.3
+	github.com/git-pkgs/purl v0.1.10
+	github.com/git-pkgs/registries v0.4.0
+	github.com/git-pkgs/resolve v0.1.2
+	github.com/git-pkgs/spdx v0.1.2
+	github.com/git-pkgs/vers v0.2.4
+	github.com/git-pkgs/vulns v0.1.4
 	github.com/go-git/go-git/v5 v5.17.0
 	github.com/mattn/go-isatty v0.0.20
 	github.com/spf13/cobra v1.10.2
@@ -246,7 +246,7 @@ require (
 	golang.org/x/exp/typeparams v0.0.0-20260209203927-2842357ff358 // indirect
 	golang.org/x/mod v0.33.0 // indirect
 	golang.org/x/net v0.50.0 // indirect
-	golang.org/x/sync v0.19.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
 	golang.org/x/tools v0.42.0 // indirect
