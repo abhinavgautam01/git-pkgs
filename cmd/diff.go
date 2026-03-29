@@ -67,7 +67,7 @@ func runDiff(cmd *cobra.Command, args []string) error {
 
 	// Set defaults
 	if fromRef == "" {
-		fromRef = "HEAD"
+		fromRef = refHEAD
 	}
 	// toRef "" means working tree
 
@@ -101,7 +101,7 @@ func runDiff(cmd *cobra.Command, args []string) error {
 
 	// Output
 	switch format {
-	case "json":
+	case formatJSON:
 		return outputDiffJSON(cmd, result)
 	default:
 		return outputDiffText(cmd, result)
@@ -367,7 +367,7 @@ func outputDiffText(cmd *cobra.Command, result *DiffResult) error {
 			if e.ToRequirement != "" {
 				line += fmt.Sprintf(" %s", e.ToRequirement)
 			}
-			if e.DependencyType != "" && e.DependencyType != "runtime" {
+			if e.DependencyType != "" && e.DependencyType != depTypeRuntime {
 				line += fmt.Sprintf(" [%s]", e.DependencyType)
 			}
 			line += fmt.Sprintf(" %s", Dim("("+e.ManifestPath+")"))
@@ -380,7 +380,7 @@ func outputDiffText(cmd *cobra.Command, result *DiffResult) error {
 		_, _ = fmt.Fprintln(cmd.OutOrStdout(), Bold("Modified:"))
 		for _, e := range result.Modified {
 			line := fmt.Sprintf("  %s %s %s -> %s", Yellow("~"), Yellow(e.Name), Dim(e.FromRequirement), e.ToRequirement)
-			if e.DependencyType != "" && e.DependencyType != "runtime" {
+			if e.DependencyType != "" && e.DependencyType != depTypeRuntime {
 				line += fmt.Sprintf(" [%s]", e.DependencyType)
 			}
 			line += fmt.Sprintf(" %s", Dim("("+e.ManifestPath+")"))
@@ -396,7 +396,7 @@ func outputDiffText(cmd *cobra.Command, result *DiffResult) error {
 			if e.FromRequirement != "" {
 				line += fmt.Sprintf(" %s", e.FromRequirement)
 			}
-			if e.DependencyType != "" && e.DependencyType != "runtime" {
+			if e.DependencyType != "" && e.DependencyType != depTypeRuntime {
 				line += fmt.Sprintf(" [%s]", e.DependencyType)
 			}
 			line += fmt.Sprintf(" %s", Dim("("+e.ManifestPath+")"))

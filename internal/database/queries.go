@@ -8,6 +8,20 @@ import (
 	"time"
 )
 
+// SQL query filter fragments
+const (
+	filterEcosystem       = " AND dc.ecosystem = ?"
+	filterCommittedAfter  = " AND c.committed_at >= ?"
+	filterCommittedBefore = " AND c.committed_at <= ?"
+)
+
+// Change type values
+const (
+	changeAdded    = "added"
+	changeModified = "modified"
+	changeRemoved  = "removed"
+)
+
 type BranchInfo struct {
 	ID              int64  `json:"id"`
 	Name            string `json:"name"`
@@ -246,30 +260,6 @@ type Dependency struct {
 	ManifestKind   string `json:"manifest_kind"`
 }
 
-func (db *DB) GetDependenciesAtCommit(sha string) ([]Dependency, error) {
-	// Find the most recent snapshot at or before this commit using position
-	var commitID int64
-	err := db.QueryRow(`
-		SELECT ds.commit_id
-		FROM dependency_snapshots ds
-		JOIN branch_commits snap_bc ON snap_bc.commit_id = ds.commit_id
-		JOIN commits c ON c.sha = ?
-		JOIN branch_commits target_bc ON target_bc.commit_id = c.id
-			AND target_bc.branch_id = snap_bc.branch_id
-		WHERE snap_bc.position <= target_bc.position
-		ORDER BY snap_bc.position DESC
-		LIMIT 1
-	`, sha).Scan(&commitID)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	return db.getDependenciesForCommitID(commitID)
-}
-
 func (db *DB) GetDependenciesAtRef(ref string, branchID int64) ([]Dependency, error) {
 	// Find the commit ID for this ref on this branch
 	var commitID int64
@@ -377,12 +367,6 @@ func (db *DB) getDependenciesForCommitID(commitID int64) ([]Dependency, error) {
 	return deps, rows.Err()
 }
 
-func (db *DB) GetCommitID(sha string) (int64, error) {
-	var id int64
-	err := db.QueryRow("SELECT id FROM commits WHERE sha = ?", sha).Scan(&id)
-	return id, err
-}
-
 type Change struct {
 	Name                string `json:"name"`
 	Ecosystem           string `json:"ecosystem"`
@@ -423,7 +407,7 @@ func (db *DB) GetCommitsWithChanges(opts LogOptions) ([]CommitWithChanges, error
 	args := []any{opts.BranchID}
 
 	if opts.Ecosystem != "" {
-		query += " AND dc.ecosystem = ?"
+		query += filterEcosystem
 		args = append(args, opts.Ecosystem)
 	}
 	if opts.Author != "" {
@@ -432,11 +416,11 @@ func (db *DB) GetCommitsWithChanges(opts LogOptions) ([]CommitWithChanges, error
 		args = append(args, pattern, pattern)
 	}
 	if opts.Since != "" {
-		query += " AND c.committed_at >= ?"
+		query += filterCommittedAfter
 		args = append(args, opts.Since)
 	}
 	if opts.Until != "" {
-		query += " AND c.committed_at <= ?"
+		query += filterCommittedBefore
 		args = append(args, opts.Until)
 	}
 
@@ -797,15 +781,15 @@ func (db *DB) GetStats(opts StatsOptions) (*Stats, error) {
 	`
 	args := []any{opts.BranchID}
 	if opts.Ecosystem != "" {
-		query += " AND dc.ecosystem = ?"
+		query += filterEcosystem
 		args = append(args, opts.Ecosystem)
 	}
 	if opts.Since != "" {
-		query += " AND c.committed_at >= ?"
+		query += filterCommittedAfter
 		args = append(args, opts.Since)
 	}
 	if opts.Until != "" {
-		query += " AND c.committed_at <= ?"
+		query += filterCommittedBefore
 		args = append(args, opts.Until)
 	}
 	err = db.QueryRow(query, args...).Scan(&stats.CommitsWithChanges)
@@ -868,15 +852,15 @@ func (db *DB) GetStats(opts StatsOptions) (*Stats, error) {
 	`
 	args = []any{opts.BranchID}
 	if opts.Ecosystem != "" {
-		query += " AND dc.ecosystem = ?"
+		query += filterEcosystem
 		args = append(args, opts.Ecosystem)
 	}
 	if opts.Since != "" {
-		query += " AND c.committed_at >= ?"
+		query += filterCommittedAfter
 		args = append(args, opts.Since)
 	}
 	if opts.Until != "" {
-		query += " AND c.committed_at <= ?"
+		query += filterCommittedBefore
 		args = append(args, opts.Until)
 	}
 	query += " GROUP BY dc.change_type"
@@ -912,15 +896,15 @@ func (db *DB) GetStats(opts StatsOptions) (*Stats, error) {
 	`
 	args = []any{opts.BranchID}
 	if opts.Ecosystem != "" {
-		query += " AND dc.ecosystem = ?"
+		query += filterEcosystem
 		args = append(args, opts.Ecosystem)
 	}
 	if opts.Since != "" {
-		query += " AND c.committed_at >= ?"
+		query += filterCommittedAfter
 		args = append(args, opts.Since)
 	}
 	if opts.Until != "" {
-		query += " AND c.committed_at <= ?"
+		query += filterCommittedBefore
 		args = append(args, opts.Until)
 	}
 	query += " GROUP BY dc.name ORDER BY cnt DESC LIMIT ?"
@@ -950,15 +934,15 @@ func (db *DB) GetStats(opts StatsOptions) (*Stats, error) {
 	`
 	args = []any{opts.BranchID}
 	if opts.Ecosystem != "" {
-		query += " AND dc.ecosystem = ?"
+		query += filterEcosystem
 		args = append(args, opts.Ecosystem)
 	}
 	if opts.Since != "" {
-		query += " AND c.committed_at >= ?"
+		query += filterCommittedAfter
 		args = append(args, opts.Since)
 	}
 	if opts.Until != "" {
-		query += " AND c.committed_at <= ?"
+		query += filterCommittedBefore
 		args = append(args, opts.Until)
 	}
 	query += " GROUP BY c.author_name ORDER BY cnt DESC LIMIT ?"
@@ -1001,15 +985,15 @@ func (db *DB) GetAuthorStats(opts StatsOptions) ([]AuthorStats, error) {
 	query += " WHERE bc.branch_id = ?"
 
 	if opts.Ecosystem != "" {
-		query += " AND dc.ecosystem = ?"
+		query += filterEcosystem
 		args = append(args, opts.Ecosystem)
 	}
 	if opts.Since != "" {
-		query += " AND c.committed_at >= ?"
+		query += filterCommittedAfter
 		args = append(args, opts.Since)
 	}
 	if opts.Until != "" {
-		query += " AND c.committed_at <= ?"
+		query += filterCommittedBefore
 		args = append(args, opts.Until)
 	}
 
@@ -1040,9 +1024,9 @@ func (db *DB) GetAuthorStats(opts StatsOptions) ([]AuthorStats, error) {
 			as.Email = email.String
 		}
 		as.ByType = map[string]int{
-			"added":    added,
-			"modified": modified,
-			"removed":  removed,
+			changeAdded:    added,
+			changeModified: modified,
+			changeRemoved:  removed,
 		}
 		results = append(results, as)
 	}
@@ -1148,7 +1132,7 @@ func (db *DB) GetWhy(branchID int64, packageName, ecosystem string) (*WhyResult,
 	args := []any{branchID, packageName}
 
 	if ecosystem != "" {
-		query += " AND dc.ecosystem = ?"
+		query += filterEcosystem
 		args = append(args, ecosystem)
 	}
 
@@ -1280,7 +1264,7 @@ func (db *DB) GetPackageHistory(opts HistoryOptions) ([]HistoryEntry, error) {
 		args = append(args, opts.PackageName)
 	}
 	if opts.Ecosystem != "" {
-		query += " AND dc.ecosystem = ?"
+		query += filterEcosystem
 		args = append(args, opts.Ecosystem)
 	}
 	if opts.Author != "" {
@@ -1289,11 +1273,11 @@ func (db *DB) GetPackageHistory(opts HistoryOptions) ([]HistoryEntry, error) {
 		args = append(args, pattern, pattern)
 	}
 	if opts.Since != "" {
-		query += " AND c.committed_at >= ?"
+		query += filterCommittedAfter
 		args = append(args, opts.Since)
 	}
 	if opts.Until != "" {
-		query += " AND c.committed_at <= ?"
+		query += filterCommittedBefore
 		args = append(args, opts.Until)
 	}
 
@@ -1473,14 +1457,6 @@ type VulnerabilityPackage struct {
 	FixedVersions    string `json:"fixed_versions"`    // comma-separated list
 }
 
-// VulnSyncStatus tracks when vulnerabilities were last synced for a package.
-type VulnSyncStatus struct {
-	Ecosystem   string `json:"ecosystem"`
-	PackageName string `json:"package_name"`
-	SyncedAt    string `json:"synced_at"`
-	VulnCount   int    `json:"vuln_count"`
-}
-
 // GetVulnerabilitiesForPackage returns all vulnerabilities affecting a specific package.
 func (db *DB) GetVulnerabilitiesForPackage(ecosystem, packageName string) ([]Vulnerability, error) {
 	rows, err := db.Query(`
@@ -1574,46 +1550,6 @@ func (db *DB) GetVulnerabilityPackageInfo(vulnID, ecosystem, packageName string)
 	return &vp, nil
 }
 
-// GetVulnSyncStatus returns packages that need vulnerability syncing.
-func (db *DB) GetVulnSyncStatus(branchID int64) ([]VulnSyncStatus, error) {
-	rows, err := db.Query(`
-		SELECT DISTINCT ds.ecosystem, ds.name
-		FROM dependency_snapshots ds
-		JOIN branch_commits bc ON bc.commit_id = ds.commit_id
-		JOIN manifests m ON m.id = ds.manifest_id
-		WHERE bc.branch_id = ?
-		AND (m.kind = 'lockfile' OR (m.kind = 'manifest' AND m.ecosystem = 'golang'))
-		AND ds.ecosystem IS NOT NULL AND ds.ecosystem != ''
-		ORDER BY ds.ecosystem, ds.name
-	`, branchID)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-
-	var statuses []VulnSyncStatus
-	for rows.Next() {
-		var s VulnSyncStatus
-		if err := rows.Scan(&s.Ecosystem, &s.PackageName); err != nil {
-			return nil, err
-		}
-		statuses = append(statuses, s)
-	}
-
-	return statuses, rows.Err()
-}
-
-// GetStoredVulnCount returns the number of vulnerabilities stored for a package.
-func (db *DB) GetStoredVulnCount(ecosystem, packageName string) (int, error) {
-	var count int
-	err := db.QueryRow(`
-		SELECT COUNT(*)
-		FROM vulnerability_packages
-		WHERE ecosystem = ? AND package_name = ?
-	`, ecosystem, packageName).Scan(&count)
-	return count, err
-}
-
 // GetVulnsSyncedAt returns when vulnerabilities were last synced for a package.
 // Returns the zero time if never synced.
 func (db *DB) GetVulnsSyncedAt(purlStr string) (time.Time, error) {
@@ -1693,42 +1629,6 @@ func (db *DB) DeleteVulnerabilitiesForPackage(ecosystem, packageName string) err
 		WHERE ecosystem = ? AND package_name = ?
 	`, ecosystem, packageName)
 	return err
-}
-
-// GetVulnerabilityStats returns vulnerability counts by severity for current dependencies.
-func (db *DB) GetVulnerabilityStats(branchID int64) (map[string]int, error) {
-	rows, err := db.Query(`
-		SELECT v.severity, COUNT(DISTINCT v.id)
-		FROM vulnerabilities v
-		JOIN vulnerability_packages vp ON vp.vulnerability_id = v.id
-		JOIN dependency_snapshots ds ON ds.ecosystem = vp.ecosystem AND ds.name = vp.package_name
-		JOIN branch_commits bc ON bc.commit_id = ds.commit_id
-		JOIN manifests m ON m.id = ds.manifest_id
-		WHERE bc.branch_id = ?
-		AND bc.position = (SELECT MAX(position) FROM branch_commits WHERE branch_id = ?)
-		AND (m.kind = 'lockfile' OR (m.kind = 'manifest' AND m.ecosystem = 'golang'))
-		GROUP BY v.severity
-	`, branchID, branchID)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-
-	stats := make(map[string]int)
-	for rows.Next() {
-		var severity sql.NullString
-		var count int
-		if err := rows.Scan(&severity, &count); err != nil {
-			return nil, err
-		}
-		sev := "unknown"
-		if severity.Valid && severity.String != "" {
-			sev = severity.String
-		}
-		stats[sev] = count
-	}
-
-	return stats, rows.Err()
 }
 
 func splitCommaList(s string) []string {
@@ -2268,7 +2168,7 @@ func (db *DB) GetBisectCandidates(opts BisectOptions) ([]BisectCandidate, error)
 	args := []any{opts.BranchID, startPos, endPos}
 
 	if opts.Ecosystem != "" {
-		query += " AND dc.ecosystem = ?"
+		query += filterEcosystem
 		args = append(args, opts.Ecosystem)
 	}
 	if opts.PackageName != "" {
@@ -2314,18 +2214,6 @@ func (db *DB) GetCommitPosition(sha string, branchID int64) (int, error) {
 		WHERE c.sha = ? AND bc.branch_id = ?
 	`, sha, branchID).Scan(&pos)
 	return pos, err
-}
-
-// GetCommitAtPosition returns the SHA of the commit at a given position.
-func (db *DB) GetCommitAtPosition(position int, branchID int64) (string, error) {
-	var sha string
-	err := db.QueryRow(`
-		SELECT c.sha
-		FROM commits c
-		JOIN branch_commits bc ON bc.commit_id = c.id
-		WHERE bc.position = ? AND bc.branch_id = ?
-	`, position, branchID).Scan(&sha)
-	return sha, err
 }
 
 // StoreSnapshot stores dependency snapshot data for a commit.

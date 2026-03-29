@@ -143,7 +143,7 @@ func runWhere(cmd *cobra.Command, args []string) error {
 	}
 
 	switch format {
-	case "json":
+	case formatJSON:
 		return outputWhereJSON(cmd, matches)
 	default:
 		return outputWhereText(cmd, matches, context > 0)

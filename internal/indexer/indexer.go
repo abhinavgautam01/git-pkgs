@@ -151,7 +151,8 @@ func (idx *Indexer) Run() (*Result, error) {
 			batchEnd = len(commits)
 		}
 
-		idx.analyzer.PrefetchDiffs(commits[batchStart:batchEnd], 8)
+		const prefetchWorkers = 8
+		idx.analyzer.PrefetchDiffs(commits[batchStart:batchEnd], prefetchWorkers)
 
 		for i := batchStart; i < batchEnd; i++ {
 			hash := commits[i]

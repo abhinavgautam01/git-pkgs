@@ -14,6 +14,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const attrFilePerm = 0644
+
 // Lockfile patterns for gitattributes
 var lockfilePatterns = []string{
 	"Gemfile.lock",
@@ -112,7 +114,7 @@ func installDiffDriver(cmd *cobra.Command) error {
 
 	if !hasGitPkgs {
 		// Append lockfile patterns
-		f, err := os.OpenFile(attrPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		f, err := os.OpenFile(attrPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, attrFilePerm)
 		if err != nil {
 			return fmt.Errorf("opening .gitattributes: %w", err)
 		}
@@ -171,7 +173,7 @@ func uninstallDiffDriver(cmd *cobra.Command) error {
 		newLines = append(newLines, line)
 	}
 
-	if err := os.WriteFile(attrPath, []byte(strings.Join(newLines, "\n")), 0644); err != nil {
+	if err := os.WriteFile(attrPath, []byte(strings.Join(newLines, "\n")), attrFilePerm); err != nil {
 		return fmt.Errorf("writing .gitattributes: %w", err)
 	}
 

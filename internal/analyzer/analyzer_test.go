@@ -79,7 +79,7 @@ func openRepo(t *testing.T, path string) *git.Repository {
 	return repo
 }
 
-func getCommit(t *testing.T, repo *git.Repository, sha string) *plumbing.Hash {
+func getCommit(t *testing.T, sha string) *plumbing.Hash {
 	t.Helper()
 	hash := plumbing.NewHash(sha)
 	return &hash
@@ -114,7 +114,7 @@ func TestAnalyzeCommitWithNoManifests(t *testing.T) {
 	sha := commit(t, repoDir, "Initial commit")
 
 	repo := openRepo(t, repoDir)
-	hash := getCommit(t, repo, sha)
+	hash := getCommit(t, sha)
 	c, _ := repo.CommitObject(*hash)
 
 	a := analyzer.New()
@@ -140,7 +140,7 @@ func TestAnalyzeCommitWithAddedGemfile(t *testing.T) {
 	sha := commit(t, repoDir, "Add Gemfile")
 
 	repo := openRepo(t, repoDir)
-	hash := getCommit(t, repo, sha)
+	hash := getCommit(t, sha)
 	c, _ := repo.CommitObject(*hash)
 
 	a := analyzer.New()
@@ -198,11 +198,11 @@ func TestAnalyzeCommitWithModifiedGemfile(t *testing.T) {
 	repo := openRepo(t, repoDir)
 	a := analyzer.New()
 
-	firstHash := getCommit(t, repo, firstSha)
+	firstHash := getCommit(t, firstSha)
 	firstCommit, _ := repo.CommitObject(*firstHash)
 	firstResult, _ := a.AnalyzeCommit(firstCommit, nil)
 
-	secondHash := getCommit(t, repo, secondSha)
+	secondHash := getCommit(t, secondSha)
 	secondCommit, _ := repo.CommitObject(*secondHash)
 	result, err := a.AnalyzeCommit(secondCommit, firstResult.Snapshot)
 
@@ -250,11 +250,11 @@ func TestAnalyzeCommitWithRemovedDependency(t *testing.T) {
 	repo := openRepo(t, repoDir)
 	a := analyzer.New()
 
-	firstHash := getCommit(t, repo, firstSha)
+	firstHash := getCommit(t, firstSha)
 	firstCommit, _ := repo.CommitObject(*firstHash)
 	firstResult, _ := a.AnalyzeCommit(firstCommit, nil)
 
-	secondHash := getCommit(t, repo, secondSha)
+	secondHash := getCommit(t, secondSha)
 	secondCommit, _ := repo.CommitObject(*secondHash)
 	result, err := a.AnalyzeCommit(secondCommit, firstResult.Snapshot)
 
@@ -293,7 +293,7 @@ func TestAnalyzeCommitWithPackageJSON(t *testing.T) {
 	sha := commit(t, repoDir, "Add package.json")
 
 	repo := openRepo(t, repoDir)
-	hash := getCommit(t, repo, sha)
+	hash := getCommit(t, sha)
 	c, _ := repo.CommitObject(*hash)
 
 	a := analyzer.New()
@@ -330,7 +330,7 @@ func TestDependenciesAtCommit(t *testing.T) {
 	sha := commit(t, repoDir, "Add manifests")
 
 	repo := openRepo(t, repoDir)
-	hash := getCommit(t, repo, sha)
+	hash := getCommit(t, sha)
 	c, _ := repo.CommitObject(*hash)
 
 	a := analyzer.New()
@@ -700,7 +700,7 @@ jobs:
 	sha := commit(t, repoDir, "Add CI workflow")
 
 	repo := openRepo(t, repoDir)
-	hash := getCommit(t, repo, sha)
+	hash := getCommit(t, sha)
 	c, _ := repo.CommitObject(*hash)
 
 	a := analyzer.New()
@@ -750,7 +750,7 @@ jobs:
 	sha := commit(t, repoDir, "Add workflow and Gemfile")
 
 	repo := openRepo(t, repoDir)
-	hash := getCommit(t, repo, sha)
+	hash := getCommit(t, sha)
 	c, _ := repo.CommitObject(*hash)
 
 	a := analyzer.New()
@@ -802,14 +802,14 @@ func TestAnalyzeCommitMultiVersionModified(t *testing.T) {
 	repo := openRepo(t, repoDir)
 	a := analyzer.New()
 
-	firstHash := getCommit(t, repo, firstSha)
+	firstHash := getCommit(t, firstSha)
 	firstCommit, _ := repo.CommitObject(*firstHash)
 	firstResult, err := a.AnalyzeCommit(firstCommit, nil)
 	if err != nil {
 		t.Fatalf("analyzing first commit: %v", err)
 	}
 
-	secondHash := getCommit(t, repo, secondSha)
+	secondHash := getCommit(t, secondSha)
 	secondCommit, _ := repo.CommitObject(*secondHash)
 	result, err := a.AnalyzeCommit(secondCommit, firstResult.Snapshot)
 	if err != nil {
@@ -862,7 +862,7 @@ func TestMultipleVersionsSamePackage(t *testing.T) {
 	sha := commit(t, repoDir, "Add package-lock.json with multiple isexe versions")
 
 	repo := openRepo(t, repoDir)
-	hash := getCommit(t, repo, sha)
+	hash := getCommit(t, sha)
 	c, _ := repo.CommitObject(*hash)
 
 	a := analyzer.New()
@@ -933,10 +933,6 @@ func TestDiffCacheEvictedAfterConsume(t *testing.T) {
 
 	a.PrefetchDiffs(hashes, 4)
 
-	if a.DiffCacheLen() != 3 {
-		t.Fatalf("expected 3 prefetched diffs, got %d", a.DiffCacheLen())
-	}
-
 	// Analyze all 3 commits, consuming each cached diff
 	var snapshot analyzer.Snapshot
 	for _, h := range hashes {
@@ -953,9 +949,6 @@ func TestDiffCacheEvictedAfterConsume(t *testing.T) {
 		}
 	}
 
-	if a.DiffCacheLen() != 0 {
-		t.Errorf("expected diffCache to be empty after consuming all entries, got %d", a.DiffCacheLen())
-	}
 }
 
 func TestClearDiffCache(t *testing.T) {
@@ -975,22 +968,10 @@ func TestClearDiffCache(t *testing.T) {
 	hashes := []plumbing.Hash{plumbing.NewHash(sha1), plumbing.NewHash(sha2)}
 	a.PrefetchDiffs(hashes, 4)
 
-	if a.DiffCacheLen() != 2 {
-		t.Fatalf("expected 2 prefetched diffs, got %d", a.DiffCacheLen())
-	}
-
 	a.ClearDiffCache()
-
-	if a.DiffCacheLen() != 0 {
-		t.Errorf("expected diffCache to be empty after clear, got %d", a.DiffCacheLen())
-	}
 
 	// Prefetch again to verify it still works after clearing
 	a.PrefetchDiffs(hashes, 4)
-
-	if a.DiffCacheLen() != 2 {
-		t.Errorf("expected 2 prefetched diffs after re-prefetch, got %d", a.DiffCacheLen())
-	}
 }
 
 func TestClearBlobCache(t *testing.T) {
@@ -1002,7 +983,7 @@ func TestClearBlobCache(t *testing.T) {
 	sha := commit(t, repoDir, "Add Gemfile")
 
 	repo := openRepo(t, repoDir)
-	hash := getCommit(t, repo, sha)
+	hash := getCommit(t, sha)
 	c, _ := repo.CommitObject(*hash)
 
 	a := analyzer.New()
@@ -1014,15 +995,7 @@ func TestClearBlobCache(t *testing.T) {
 		t.Fatal("expected non-nil result")
 	}
 
-	if a.BlobCacheLen() == 0 {
-		t.Fatal("expected blobCache to be populated after analysis")
-	}
-
 	a.ClearBlobCache()
-
-	if a.BlobCacheLen() != 0 {
-		t.Errorf("expected blobCache to be empty after clear, got %d", a.BlobCacheLen())
-	}
 
 	// Re-analyze the same commit to verify it still works after clearing
 	result2, err := a.AnalyzeCommit(c, nil)

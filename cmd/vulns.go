@@ -21,6 +21,19 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const (
+	vulnsSyncTimeout         = 5 * time.Minute
+	vulnsQueryTimeout        = 120 * time.Second
+	vulnsShowTimeout         = 30 * time.Second
+	vulnsHistoryTimeout      = 10 * time.Second
+	vulnsSemaphoreSize       = 20
+	defaultVulnsLogLimit     = 20
+	defaultVulnsHistoryLimit = 50
+	defaultVulnsPraiseLimit  = 50
+	minCommitsForAnalysis    = 2
+	separatorMediumLen       = 30
+)
+
 var severityOrder = map[string]int{"critical": 0, "high": 1, "medium": 2, "low": 3, "unknown": 4}
 
 func addVulnsCmd(parent *cobra.Command) {
@@ -132,7 +145,7 @@ func syncVulnerabilitiesForDeps(db *database.DB, source vulns.Source, lockfileDe
 		_, _ = fmt.Fprintf(w, "Syncing vulnerabilities for %d packages...\n", len(uniquePkgs))
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), vulnsSyncTimeout)
 	defer cancel()
 
 	// Build queries for all unique packages
@@ -185,7 +198,7 @@ func syncVulnerabilitiesForDeps(db *database.DB, source vulns.Source, lockfileDe
 	totalToFetch := len(uniqueVulnIDs)
 	var fetchCount int
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, 20)
+	sem := make(chan struct{}, vulnsSemaphoreSize)
 
 	for id := range uniqueVulnIDs {
 		wg.Add(1)
@@ -416,7 +429,7 @@ func runVulnsScan(cmd *cobra.Command, args []string) error {
 
 	var vulnResults []VulnResult
 
-	minSeverity := 4
+	minSeverity := allSeverities
 	if severity != "" {
 		if order, ok := severityOrder[strings.ToLower(severity)]; ok {
 			minSeverity = order
@@ -451,12 +464,13 @@ func runVulnsScan(cmd *cobra.Command, args []string) error {
 	}
 
 	switch format {
-	case "json":
+	case formatJSON:
 		return outputVulnsJSON(cmd, vulnResults)
 	case "sarif":
 		return outputVulnsSARIF(cmd, vulnResults)
 	default:
-		return outputVulnsText(cmd, vulnResults)
+		outputVulnsText(cmd, vulnResults)
+		return nil
 	}
 }
 
@@ -467,7 +481,7 @@ func scanLive(deps []database.Dependency, minSeverity int) ([]VulnResult, error)
 		purls[i] = purl.MakePURL(d.Ecosystem, d.Name, d.Requirement)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), vulnsQueryTimeout)
 	defer cancel()
 
 	results, err := source.QueryBatch(ctx, purls)
@@ -587,7 +601,7 @@ func outputVulnsJSON(cmd *cobra.Command, results []VulnResult) error {
 	return enc.Encode(results)
 }
 
-func outputVulnsText(cmd *cobra.Command, results []VulnResult) error {
+func outputVulnsText(cmd *cobra.Command, results []VulnResult) {
 	// Group by severity
 	bySeverity := make(map[string][]VulnResult)
 	for _, r := range results {
@@ -616,8 +630,8 @@ func outputVulnsText(cmd *cobra.Command, results []VulnResult) error {
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s - %s@%s\n", Bold(v.ID), v.Package, v.Version)
 			if v.Summary != "" {
 				summary := v.Summary
-				if len(summary) > 80 {
-					summary = summary[:77] + "..."
+				if len(summary) > summaryTruncLen {
+					summary = summary[:summaryTruncLen-3] + "..."
 				}
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "    %s\n", Dim(summary))
 			}
@@ -627,8 +641,6 @@ func outputVulnsText(cmd *cobra.Command, results []VulnResult) error {
 		}
 		_, _ = fmt.Fprintln(cmd.OutOrStdout())
 	}
-
-	return nil
 }
 
 // SARIF output for integration with CI/CD tools
@@ -741,16 +753,23 @@ func outputVulnsSARIF(cmd *cobra.Command, results []VulnResult) error {
 	return enc.Encode(report)
 }
 
+const (
+	scoreCritical = 9.0
+	scoreHigh     = 7.0
+	scoreMedium   = 4.0
+	scoreLow      = 1.0
+)
+
 func severityToScore(severity string) float64 {
 	switch severity {
 	case "critical":
-		return 9.0
+		return scoreCritical
 	case "high":
-		return 7.0
+		return scoreHigh
 	case "medium":
-		return 4.0
+		return scoreMedium
 	case "low":
-		return 1.0
+		return scoreLow
 	default:
 		return 0.0
 	}
@@ -793,7 +812,7 @@ func runVulnsShow(cmd *cobra.Command, args []string) error {
 	branchName, _ := cmd.Flags().GetString("branch")
 
 	source := osv.New(osv.WithUserAgent("git-pkgs/" + version))
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), vulnsShowTimeout)
 	defer cancel()
 
 	vuln, err := source.Get(ctx, vulnID)
@@ -814,7 +833,7 @@ func runVulnsShow(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	if format == "json" {
+	if format == formatJSON {
 		result := VulnShowResult{
 			Vulnerability: vuln,
 			Exposure:      exposure,
@@ -868,7 +887,7 @@ func runVulnsShow(cmd *cobra.Command, args []string) error {
 	// Show exposure analysis if requested
 	if exposure != nil {
 		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Exposure Analysis:")
-		_, _ = fmt.Fprintln(cmd.OutOrStdout(), strings.Repeat("-", 18))
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), strings.Repeat("-", separatorShortLen))
 		if exposure.Affected {
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Status: %s\n", Red("AFFECTED"))
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Package: %s @ %s\n", exposure.AffectedPackage, exposure.CurrentVersion)
@@ -994,7 +1013,7 @@ func runVulnsDiff(cmd *cobra.Command, args []string) error {
 	format, _ := cmd.Flags().GetString("format")
 
 	fromRef := "HEAD~1"
-	toRef := "HEAD"
+	toRef := refHEAD
 	if len(args) >= 1 {
 		fromRef = args[0]
 	}
@@ -1039,7 +1058,7 @@ func runVulnsDiff(cmd *cobra.Command, args []string) error {
 
 	// Find added and fixed
 
-	minSeverity := 4
+	minSeverity := allSeverities
 	if severity != "" {
 		if order, ok := severityOrder[strings.ToLower(severity)]; ok {
 			minSeverity = order
@@ -1062,7 +1081,7 @@ func runVulnsDiff(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	if format == "json" {
+	if format == formatJSON {
 		enc := json.NewEncoder(cmd.OutOrStdout())
 		enc.SetIndent("", "  ")
 		return enc.Encode(result)
@@ -1112,17 +1131,18 @@ func getVulnsAtRef(db *database.DB, branchID int64, ref, ecosystem string) ([]Vu
 	}
 
 	// Use cached vulnerability data from the database
-	return scanCached(db, lockfileDeps, 4) // 4 = include all severities
+	return scanCached(db, lockfileDeps, allSeverities)
 }
 
 // getAllTimeVulns gets all vulnerabilities that have ever affected the codebase
 // by scanning commit history and collecting any vulnerability that was present.
 func getAllTimeVulns(db *database.DB, branchID int64, ecosystem string) ([]VulnResult, error) {
 	// Get recent commits with changes
+	const allTimeVulnsLimit = 100
 	commits, err := db.GetCommitsWithChanges(database.LogOptions{
 		BranchID:  branchID,
 		Ecosystem: ecosystem,
-		Limit:     100,
+		Limit:     allTimeVulnsLimit,
 	})
 	if err != nil {
 		return nil, err
@@ -1206,7 +1226,7 @@ func runVulnsBlame(cmd *cobra.Command, args []string) error {
 	if allTime {
 		vulns, err = getAllTimeVulns(db, branch.ID, ecosystem)
 	} else {
-		vulns, err = getVulnsAtRef(db, branch.ID, "HEAD", ecosystem)
+		vulns, err = getVulnsAtRef(db, branch.ID, refHEAD, ecosystem)
 	}
 	if err != nil {
 		return fmt.Errorf("getting vulnerabilities: %w", err)
@@ -1214,7 +1234,7 @@ func runVulnsBlame(cmd *cobra.Command, args []string) error {
 
 	// Apply severity filter
 
-	minSeverity := 4
+	minSeverity := allSeverities
 	if severity != "" {
 		if order, ok := severityOrder[strings.ToLower(severity)]; ok {
 			minSeverity = order
@@ -1275,7 +1295,7 @@ func runVulnsBlame(cmd *cobra.Command, args []string) error {
 		return entries[i].AddedBy < entries[j].AddedBy
 	})
 
-	if format == "json" {
+	if format == formatJSON {
 		enc := json.NewEncoder(cmd.OutOrStdout())
 		enc.SetIndent("", "  ")
 		return enc.Encode(entries)
@@ -1326,7 +1346,7 @@ Shows a timeline of how vulnerabilities have changed over time.`,
 	logCmd.Flags().String("author", "", "Filter by author name or email")
 	logCmd.Flags().Bool("introduced", false, "Only show commits that introduced vulnerabilities")
 	logCmd.Flags().Bool("fixed", false, "Only show commits that fixed vulnerabilities")
-	logCmd.Flags().Int("limit", 20, "Maximum commits to check")
+	logCmd.Flags().Int("limit", defaultVulnsLogLimit, "Maximum commits to check")
 	logCmd.Flags().StringP("format", "f", "text", "Output format: text, json")
 	parent.AddCommand(logCmd)
 }
@@ -1381,7 +1401,7 @@ func runVulnsLog(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	minSeverity := 4
+	minSeverity := allSeverities
 	if severity != "" {
 		if order, ok := severityOrder[strings.ToLower(severity)]; ok {
 			minSeverity = order
@@ -1461,7 +1481,7 @@ func runVulnsLog(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	if format == "json" {
+	if format == formatJSON {
 		enc := json.NewEncoder(cmd.OutOrStdout())
 		enc.SetIndent("", "  ")
 		return enc.Encode(entries)
@@ -1497,7 +1517,7 @@ Shows when the package was vulnerable and what vulnerabilities affected it.`,
 
 	historyCmd.Flags().StringP("branch", "b", "", "Branch to query (default: first tracked branch)")
 	historyCmd.Flags().StringP("ecosystem", "e", "", "Filter by ecosystem")
-	historyCmd.Flags().Int("limit", 50, "Maximum commits to check")
+	historyCmd.Flags().Int("limit", defaultVulnsHistoryLimit, "Maximum commits to check")
 	historyCmd.Flags().StringP("format", "f", "text", "Output format: text, json")
 	parent.AddCommand(historyCmd)
 }
@@ -1569,7 +1589,7 @@ func runVulnsHistory(cmd *cobra.Command, args []string) error {
 		}
 
 		// Query for vulnerabilities
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), vulnsHistoryTimeout)
 		p := purl.MakePURL(pkgDep.Ecosystem, pkgDep.Name, pkgDep.Requirement)
 		queryResults, err := source.Query(ctx, p)
 		cancel()
@@ -1599,7 +1619,7 @@ func runVulnsHistory(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	if format == "json" {
+	if format == formatJSON {
 		enc := json.NewEncoder(cmd.OutOrStdout())
 		enc.SetIndent("", "  ")
 		return enc.Encode(history)
@@ -1676,7 +1696,7 @@ func runVulnsExposure(cmd *cobra.Command, args []string) error {
 	// Get vulnerabilities at the specified ref
 	targetRef := ref
 	if targetRef == "" {
-		targetRef = "HEAD"
+		targetRef = refHEAD
 	}
 
 	var vulns []VulnResult
@@ -1692,7 +1712,7 @@ func runVulnsExposure(cmd *cobra.Command, args []string) error {
 
 	// Apply severity filter
 
-	minSeverity := 4
+	minSeverity := allSeverities
 	if severity != "" {
 		if order, ok := severityOrder[strings.ToLower(severity)]; ok {
 			minSeverity = order
@@ -1764,7 +1784,7 @@ func runVulnsExposure(cmd *cobra.Command, args []string) error {
 		return outputExposureSummary(cmd, entries, format)
 	}
 
-	if format == "json" {
+	if format == formatJSON {
 		enc := json.NewEncoder(cmd.OutOrStdout())
 		enc.SetIndent("", "  ")
 		return enc.Encode(entries)
@@ -1818,14 +1838,14 @@ func outputExposureSummary(cmd *cobra.Command, entries []VulnExposureEntry, form
 		summary.OldestExposure = oldestDate[:10]
 	}
 
-	if format == "json" {
+	if format == formatJSON {
 		enc := json.NewEncoder(cmd.OutOrStdout())
 		enc.SetIndent("", "  ")
 		return enc.Encode(summary)
 	}
 
 	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Vulnerability Exposure Summary")
-	_, _ = fmt.Fprintln(cmd.OutOrStdout(), strings.Repeat("-", 30))
+	_, _ = fmt.Fprintln(cmd.OutOrStdout(), strings.Repeat("-", separatorMediumLen))
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Total vulnerabilities: %d\n", summary.TotalVulnerabilities)
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Total exposure:        %d days\n", summary.TotalExposureDays)
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Average exposure:      %.1f days\n", summary.AverageExposureDays)
@@ -1857,7 +1877,7 @@ This is the opposite of blame - it shows positive contributions to security.`,
 	praiseCmd.Flags().StringP("branch", "b", "", "Branch to query (default: first tracked branch)")
 	praiseCmd.Flags().StringP("ecosystem", "e", "", "Filter by ecosystem")
 	praiseCmd.Flags().StringP("severity", "s", "", "Minimum severity: critical, high, medium, low")
-	praiseCmd.Flags().Int("limit", 50, "Maximum commits to check")
+	praiseCmd.Flags().Int("limit", defaultVulnsPraiseLimit, "Maximum commits to check")
 	praiseCmd.Flags().StringP("format", "f", "text", "Output format: text, json")
 	praiseCmd.Flags().Bool("summary", false, "Show author leaderboard only")
 	parent.AddCommand(praiseCmd)
@@ -1901,12 +1921,12 @@ func runVulnsPraise(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("getting commits: %w", err)
 	}
 
-	if len(commits) < 2 {
+	if len(commits) < minCommitsForAnalysis {
 		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Not enough commits to analyze vulnerability fixes.")
 		return nil
 	}
 
-	minSeverity := 4
+	minSeverity := allSeverities
 	if severity != "" {
 		if order, ok := severityOrder[strings.ToLower(severity)]; ok {
 			minSeverity = order
@@ -1969,7 +1989,7 @@ func runVulnsPraise(cmd *cobra.Command, args []string) error {
 		return outputPraiseSummary(cmd, entries, format)
 	}
 
-	if format == "json" {
+	if format == formatJSON {
 		enc := json.NewEncoder(cmd.OutOrStdout())
 		enc.SetIndent("", "  ")
 		return enc.Encode(entries)
@@ -2050,23 +2070,23 @@ func outputPraiseSummary(cmd *cobra.Command, entries []VulnPraiseEntry, format s
 		return summary.Authors[i].Author < summary.Authors[j].Author
 	})
 
-	if format == "json" {
+	if format == formatJSON {
 		enc := json.NewEncoder(cmd.OutOrStdout())
 		enc.SetIndent("", "  ")
 		return enc.Encode(summary)
 	}
 
 	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Vulnerability Fix Leaderboard")
-	_, _ = fmt.Fprintln(cmd.OutOrStdout(), strings.Repeat("-", 30))
+	_, _ = fmt.Fprintln(cmd.OutOrStdout(), strings.Repeat("-", separatorMediumLen))
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Total fixes: %d\n\n", summary.TotalFixes)
 
 	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Rank  Author                    Fixes  Critical  High  Packages")
-	_, _ = fmt.Fprintln(cmd.OutOrStdout(), strings.Repeat("-", 70))
+	_, _ = fmt.Fprintln(cmd.OutOrStdout(), strings.Repeat("-", separatorLongLen))
 
 	for i, a := range summary.Authors {
 		authorName := a.Author
-		if len(authorName) > 24 {
-			authorName = authorName[:21] + "..."
+		if len(authorName) > authorTruncLen {
+			authorName = authorName[:authorTruncLen-3] + "..."
 		}
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%4d  %-24s  %5d  %8d  %4d  %8d\n",
 			i+1,

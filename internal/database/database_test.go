@@ -185,22 +185,10 @@ func TestMultipleVersionsSamePackage(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
-	writer, err := database.NewWriter(db)
-	if err != nil {
-		t.Fatalf("failed to create writer: %v", err)
-	}
-	defer func() { _ = writer.Close() }()
+	writer := database.NewBatchWriter(db)
 
 	if err := writer.CreateBranch("main"); err != nil {
 		t.Fatalf("failed to create branch: %v", err)
-	}
-
-	commitID, _, err := writer.InsertCommit(database.CommitInfo{
-		SHA:     "abc123",
-		Message: "test commit",
-	}, true)
-	if err != nil {
-		t.Fatalf("failed to insert commit: %v", err)
 	}
 
 	manifest := database.ManifestInfo{
@@ -209,28 +197,31 @@ func TestMultipleVersionsSamePackage(t *testing.T) {
 		Kind:      "lockfile",
 	}
 
+	writer.AddCommit(database.CommitInfo{
+		SHA:     "abc123",
+		Message: "test commit",
+	}, true)
+
 	// Insert isexe@2.0.0 (runtime)
-	err = writer.InsertSnapshot(commitID, manifest, database.SnapshotInfo{
+	writer.AddSnapshot("abc123", manifest, database.SnapshotInfo{
 		ManifestPath:   "package-lock.json",
 		Name:           "isexe",
 		Ecosystem:      "npm",
 		Requirement:    "2.0.0",
 		DependencyType: "runtime",
 	})
-	if err != nil {
-		t.Fatalf("failed to insert isexe@2.0.0: %v", err)
-	}
 
 	// Insert isexe@3.1.1 (development) - same package name, different version
-	err = writer.InsertSnapshot(commitID, manifest, database.SnapshotInfo{
+	writer.AddSnapshot("abc123", manifest, database.SnapshotInfo{
 		ManifestPath:   "package-lock.json",
 		Name:           "isexe",
 		Ecosystem:      "npm",
 		Requirement:    "3.1.1",
 		DependencyType: "development",
 	})
-	if err != nil {
-		t.Fatalf("failed to insert isexe@3.1.1: %v", err)
+
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("failed to flush: %v", err)
 	}
 
 	// Verify both versions are stored
@@ -369,93 +360,6 @@ func TestStoreSnapshotWithDuplicates(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("expected 1 rails entry after second call, got %d", count)
-	}
-}
-
-func TestGetDependenciesAtCommit(t *testing.T) {
-	tmpDir := t.TempDir()
-	dbPath := filepath.Join(tmpDir, "pkgs.sqlite3")
-
-	db, err := database.Create(dbPath)
-	if err != nil {
-		t.Fatalf("failed to create database: %v", err)
-	}
-	defer func() { _ = db.Close() }()
-
-	branch, err := db.GetOrCreateBranch("main")
-	if err != nil {
-		t.Fatalf("failed to create branch: %v", err)
-	}
-
-	// Create commits in order. SHA hex values are intentionally chosen so that
-	// lexicographic order differs from commit order:
-	//   commit 1 (position 1): SHA "ff0001" (lexicographically last)
-	//   commit 2 (position 2): SHA "000002" (lexicographically first)
-	//   commit 3 (position 3): SHA "880003" (lexicographically middle)
-	commits := []database.CommitInfo{
-		{SHA: "ff0001", Message: "first commit"},
-		{SHA: "000002", Message: "second commit"},
-		{SHA: "880003", Message: "third commit"},
-	}
-
-	// Store snapshot at commit 1 with lodash
-	err = db.StoreSnapshot(branch.ID, commits[0], []database.SnapshotInfo{
-		{ManifestPath: "package.json", Name: "lodash", Ecosystem: "npm", Requirement: "4.0.0"},
-	})
-	if err != nil {
-		t.Fatalf("failed to store snapshot 1: %v", err)
-	}
-
-	// Store commit 2 (no snapshot, just link it to the branch)
-	err = db.StoreSnapshot(branch.ID, commits[1], []database.SnapshotInfo{
-		{ManifestPath: "package.json", Name: "lodash", Ecosystem: "npm", Requirement: "4.0.0"},
-		{ManifestPath: "package.json", Name: "react", Ecosystem: "npm", Requirement: "18.0.0"},
-	})
-	if err != nil {
-		t.Fatalf("failed to store snapshot 2: %v", err)
-	}
-
-	// Query dependencies at commit 3 (no snapshot at this commit, should get
-	// the snapshot from commit 2 since it's earlier in position order, not
-	// commit 1 which would be wrong if using lexicographic SHA comparison)
-	err = db.StoreSnapshot(branch.ID, commits[2], []database.SnapshotInfo{
-		{ManifestPath: "package.json", Name: "lodash", Ecosystem: "npm", Requirement: "4.0.0"},
-		{ManifestPath: "package.json", Name: "react", Ecosystem: "npm", Requirement: "18.0.0"},
-		{ManifestPath: "package.json", Name: "express", Ecosystem: "npm", Requirement: "4.18.0"},
-	})
-	if err != nil {
-		t.Fatalf("failed to store snapshot 3: %v", err)
-	}
-
-	// Query at commit 2 -- should get the snapshot stored at commit 2 (position 2)
-	deps, err := db.GetDependenciesAtCommit("000002")
-	if err != nil {
-		t.Fatalf("GetDependenciesAtCommit failed: %v", err)
-	}
-
-	if len(deps) != 2 {
-		t.Fatalf("expected 2 dependencies at commit 2, got %d", len(deps))
-	}
-
-	names := map[string]bool{}
-	for _, d := range deps {
-		names[d.Name] = true
-	}
-	if !names["lodash"] || !names["react"] {
-		t.Errorf("expected lodash and react, got %v", names)
-	}
-
-	// Query at commit 1 -- should get only lodash (not react, which was added later)
-	deps, err = db.GetDependenciesAtCommit("ff0001")
-	if err != nil {
-		t.Fatalf("GetDependenciesAtCommit at commit 1 failed: %v", err)
-	}
-
-	if len(deps) != 1 {
-		t.Fatalf("expected 1 dependency at commit 1, got %d", len(deps))
-	}
-	if deps[0].Name != "lodash" {
-		t.Errorf("expected lodash at commit 1, got %s", deps[0].Name)
 	}
 }
 
@@ -698,32 +602,6 @@ func TestInsertNoteUpsert(t *testing.T) {
 	}
 	if len(notes) != 1 {
 		t.Errorf("expected 1 note, got %d", len(notes))
-	}
-}
-
-func TestNewWriterClose(t *testing.T) {
-	tmpDir := t.TempDir()
-	dbPath := filepath.Join(tmpDir, "pkgs.sqlite3")
-
-	db, err := database.Create(dbPath)
-	if err != nil {
-		t.Fatalf("failed to create database: %v", err)
-	}
-	defer func() { _ = db.Close() }()
-
-	writer, err := database.NewWriter(db)
-	if err != nil {
-		t.Fatalf("failed to create writer: %v", err)
-	}
-
-	// Close should not error
-	if err := writer.Close(); err != nil {
-		t.Errorf("unexpected error closing writer: %v", err)
-	}
-
-	// Close again should not panic (statements are nil-safe)
-	if err := writer.Close(); err != nil {
-		t.Errorf("unexpected error on second close: %v", err)
 	}
 }
 

@@ -13,6 +13,41 @@ const (
 	MaxSQLVariables         = 999 // SQLite default limit
 )
 
+type CommitInfo struct {
+	SHA         string
+	Message     string
+	AuthorName  string
+	AuthorEmail string
+	CommittedAt time.Time
+}
+
+type ManifestInfo struct {
+	Path      string
+	Ecosystem string
+	Kind      string
+}
+
+type ChangeInfo struct {
+	ManifestPath        string
+	Name                string
+	Ecosystem           string
+	PURL                string
+	ChangeType          string
+	Requirement         string
+	PreviousRequirement string
+	DependencyType      string
+}
+
+type SnapshotInfo struct {
+	ManifestPath   string
+	Name           string
+	Ecosystem      string
+	PURL           string
+	Requirement    string
+	DependencyType string
+	Integrity      string
+}
+
 type pendingCommit struct {
 	info       CommitInfo
 	hasChanges bool
@@ -410,7 +445,8 @@ func (w *BatchWriter) ensureManifests(tx *sql.Tx, now time.Time, changes []pendi
 	var sb strings.Builder
 	sb.WriteString("INSERT OR IGNORE INTO manifests (path, ecosystem, kind, created_at, updated_at) VALUES ")
 
-	args := make([]any, 0, len(toInsert)*5)
+	const manifestColumns = 5 // path, ecosystem, kind, created_at, updated_at
+	args := make([]any, 0, len(toInsert)*manifestColumns)
 	for i, m := range toInsert {
 		if i > 0 {
 			sb.WriteString(",")
@@ -552,10 +588,6 @@ func (w *BatchWriter) UpdateBranchLastSHA(sha string) error {
 		sha, time.Now(), w.branchID,
 	)
 	return err
-}
-
-func (w *BatchWriter) LastSHA() string {
-	return w.lastSHA
 }
 
 func (w *BatchWriter) HasPendingSnapshots(sha string) bool {
