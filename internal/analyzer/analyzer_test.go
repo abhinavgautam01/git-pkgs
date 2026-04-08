@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -679,6 +680,57 @@ jobs:
 	}
 	if names["puma"] {
 		t.Error("expected puma from vendor/Gemfile to be ignored")
+	}
+}
+
+func TestDependenciesInWorkingDirRejectsSymlinkEscape(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks require elevation on windows")
+	}
+
+	repoDir := createTestRepo(t)
+	addFile(t, repoDir, "README.md", "# Test")
+	commit(t, repoDir, "Initial commit")
+
+	// Real manifest in a subdir to confirm the analyzer still works
+	addFile(t, repoDir, "app/package.json", samplePackageJSON(map[string]string{
+		"lodash": "^4.17.21",
+	}))
+
+	// Valid manifest content sitting outside the repo
+	outside := t.TempDir()
+	secret := filepath.Join(outside, "secret.json")
+	if err := os.WriteFile(secret, []byte(samplePackageJSON(map[string]string{
+		"escaped-symlink-marker": "1.0.0",
+	})), 0644); err != nil {
+		t.Fatalf("write secret: %v", err)
+	}
+
+	// Symlink at the repo root named like a manifest, pointing outside
+	if err := os.Symlink(secret, filepath.Join(repoDir, "package.json")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	a := analyzer.New()
+	deps, err := a.DependenciesInWorkingDir(repoDir, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for _, d := range deps {
+		if d.Name == "escaped-symlink-marker" {
+			t.Fatalf("symlink escaped repo root, read %s", secret)
+		}
+	}
+
+	var found bool
+	for _, d := range deps {
+		if d.Name == "lodash" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected lodash from app/package.json, got %+v", deps)
 	}
 }
 
