@@ -17,7 +17,7 @@ require (
 	github.com/go-git/go-git/v5 v5.17.2
 	github.com/mattn/go-isatty v0.0.20
 	github.com/spf13/cobra v1.10.2
-	modernc.org/sqlite v1.47.0
+	modernc.org/sqlite v1.48.0
 )
 
 require (
