@@ -5,19 +5,19 @@ go 1.25.7
 require (
 	github.com/git-pkgs/changelog v0.1.2
 	github.com/git-pkgs/enrichment v0.2.2
-	github.com/git-pkgs/gitignore v1.1.1
+	github.com/git-pkgs/gitignore v1.1.2
 	github.com/git-pkgs/managers v0.8.2
 	github.com/git-pkgs/manifests v0.4.3
 	github.com/git-pkgs/purl v0.1.10
-	github.com/git-pkgs/registries v0.4.0
+	github.com/git-pkgs/registries v0.4.1
 	github.com/git-pkgs/resolve v0.1.2
 	github.com/git-pkgs/spdx v0.1.2
 	github.com/git-pkgs/vers v0.2.4
 	github.com/git-pkgs/vulns v0.1.4
 	github.com/go-git/go-git/v5 v5.17.2
-	github.com/mattn/go-isatty v0.0.20
+	github.com/mattn/go-isatty v0.0.21
 	github.com/spf13/cobra v1.10.2
-	modernc.org/sqlite v1.48.0
+	modernc.org/sqlite v1.48.2
 )
 
 require (
