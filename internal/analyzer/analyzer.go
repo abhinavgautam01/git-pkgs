@@ -3,6 +3,7 @@ package analyzer
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -675,8 +676,25 @@ func (a *Analyzer) parseSupplementsInDir(tree *object.Tree, dir string) map[supp
 	return hashes
 }
 
+func readFileInRoot(r *os.Root, name string) ([]byte, error) {
+	f, err := r.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	return io.ReadAll(f)
+}
+
 func (a *Analyzer) DependenciesInWorkingDir(root string, includeSubmodules bool) ([]Change, error) {
 	var deps []Change
+
+	// Scope all file reads to the repo directory. Manifest paths are
+	// repo-controlled; a symlink named like a manifest could point anywhere.
+	osRoot, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, fmt.Errorf("opening root %q: %w", root, err)
+	}
+	defer func() { _ = osRoot.Close() }()
 
 	// Load gitignore patterns and submodule paths
 	matcher := gitignore.New(root)
@@ -697,17 +715,17 @@ func (a *Analyzer) DependenciesInWorkingDir(root string, includeSubmodules bool)
 		}
 	}
 
-	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+	err = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
 		}
 
-		relPath, err := filepath.Rel(root, path)
+		osRel, err := filepath.Rel(root, path)
 		if err != nil {
 			return nil
 		}
 		// Normalize to forward slashes for cross-platform consistency with git paths
-		relPath = filepath.ToSlash(relPath)
+		relPath := filepath.ToSlash(osRel)
 
 		if info.IsDir() {
 			// Always skip .git
@@ -746,7 +764,7 @@ func (a *Analyzer) DependenciesInWorkingDir(root string, includeSubmodules bool)
 			return nil
 		}
 
-		content, err := os.ReadFile(path)
+		content, err := readFileInRoot(osRoot, osRel)
 		if err != nil {
 			return nil
 		}
@@ -757,7 +775,7 @@ func (a *Analyzer) DependenciesInWorkingDir(root string, includeSubmodules bool)
 		}
 
 		// Look for supplement files in the same directory
-		supHashes := a.parseSupplementsInWorkingDir(filepath.Dir(path), filepath.Dir(relPath))
+		supHashes := a.parseSupplementsInWorkingDir(osRoot, filepath.Dir(osRel), filepath.Dir(relPath))
 
 		for _, dep := range result.Dependencies {
 			integrity := dep.Integrity
@@ -784,10 +802,15 @@ func (a *Analyzer) DependenciesInWorkingDir(root string, includeSubmodules bool)
 	return deps, err
 }
 
-func (a *Analyzer) parseSupplementsInWorkingDir(absDir, relDir string) map[supplementKey]string {
+func (a *Analyzer) parseSupplementsInWorkingDir(osRoot *os.Root, osDir, relDir string) map[supplementKey]string {
 	hashes := make(map[supplementKey]string)
 
-	entries, err := os.ReadDir(absDir)
+	d, err := osRoot.Open(osDir)
+	if err != nil {
+		return hashes
+	}
+	entries, err := d.ReadDir(-1)
+	_ = d.Close()
 	if err != nil {
 		return hashes
 	}
@@ -801,7 +824,7 @@ func (a *Analyzer) parseSupplementsInWorkingDir(absDir, relDir string) map[suppl
 			continue
 		}
 
-		content, err := os.ReadFile(filepath.Join(absDir, entry.Name()))
+		content, err := readFileInRoot(osRoot, filepath.Join(osDir, entry.Name()))
 		if err != nil {
 			continue
 		}
