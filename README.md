@@ -602,11 +602,11 @@ diff --git a/Gemfile.lock b/Gemfile.lock
 --- a/Gemfile.lock
 +++ b/Gemfile.lock
 @@ -1,3 +1,3 @@
-+kamal 1.0.0
--puma 5.0.0
-+puma 6.0.0
- rails 7.0.0
--sidekiq 6.0.0
++kamal 1.0.0 (runtime)
+-puma 5.0.0 (runtime)
++puma 6.0.0 (runtime)
+ rails 7.0.0 (runtime)
+-sidekiq 6.0.0 (runtime)
 ```
 
 Use `git diff --no-textconv` to see the raw lockfile diff. To remove: `git pkgs diff-driver --uninstall`
