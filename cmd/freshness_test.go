@@ -88,6 +88,43 @@ func TestFreshnessCommand(t *testing.T) {
 	})
 }
 
+func TestFreshnessJSONNoResolvedDependencies(t *testing.T) {
+	repoDir := createTestRepo(t)
+	addFileAndCommit(t, repoDir, "package.json", packageJSON, "Add manifest")
+
+	cleanup := chdir(t, repoDir)
+	defer cleanup()
+
+	rootCmd := cmd.NewRootCmd()
+	rootCmd.SetArgs([]string{"init"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	rootCmd = cmd.NewRootCmd()
+	rootCmd.SetArgs([]string{"freshness", "--format", "json"})
+	rootCmd.SetOut(&stdout)
+
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("freshness json failed: %v", err)
+	}
+
+	var result cmd.FreshnessResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("failed to parse JSON: %v; output: %s", err, stdout.String())
+	}
+	if result.Summary.TotalDependencies != 0 {
+		t.Fatalf("total dependencies = %d, want 0", result.Summary.TotalDependencies)
+	}
+	if result.Dependencies == nil {
+		t.Fatal("dependencies = nil, want empty array")
+	}
+	if len(result.Dependencies) != 0 {
+		t.Fatalf("dependencies length = %d, want 0", len(result.Dependencies))
+	}
+}
+
 type failingFreshnessClient struct{}
 
 func (f failingFreshnessClient) BulkLookup(_ context.Context, _ []string) (map[string]*enrichment.PackageInfo, error) {

@@ -98,6 +98,9 @@ func runFreshness(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(resolved) == 0 {
+		if format == formatJSON {
+			return outputFreshnessJSON(cmd, emptyFreshnessResult())
+		}
 		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No lockfile dependencies found.")
 		return nil
 	}
@@ -119,7 +122,7 @@ func runFreshness(cmd *cobra.Command, args []string) error {
 }
 
 func computeFreshness(db *database.DB, deps []database.Dependency) (*FreshnessResult, error) {
-	result := &FreshnessResult{}
+	result := emptyFreshnessResult()
 	result.Summary.TotalDependencies = len(deps)
 
 	purlVersions, err := loadFreshnessVersions(db, deps)
@@ -202,13 +205,12 @@ func loadFreshnessVersions(db *database.DB, deps []database.Dependency) (map[str
 		return nil, err
 	}
 
-	const freshnessTimeout = 60 * time.Second
-	ctx, cancel := context.WithTimeout(context.Background(), freshnessTimeout)
-	defer cancel()
-
+	const freshnessLookupTimeout = 60 * time.Second
 	var fetchErrors []error
 	for _, purlStr := range missing {
+		ctx, cancel := context.WithTimeout(context.Background(), freshnessLookupTimeout)
 		versions, err := fetchFreshnessVersions(ctx, client, purlStr)
+		cancel()
 		if err != nil {
 			fetchErrors = append(fetchErrors, fmt.Errorf("%s: %w", purlStr, err))
 			continue
@@ -227,6 +229,12 @@ func loadFreshnessVersions(db *database.DB, deps []database.Dependency) (map[str
 	}
 
 	return result, nil
+}
+
+func emptyFreshnessResult() *FreshnessResult {
+	return &FreshnessResult{
+		Dependencies: []FreshnessEntry{},
+	}
 }
 
 func cachedFreshnessVersions(db *database.DB, purlStr string) ([]freshnessVersion, error) {
