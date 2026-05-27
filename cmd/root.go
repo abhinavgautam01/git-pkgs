@@ -77,6 +77,7 @@ func NewRootCmd() *cobra.Command {
 	addDeprecatedCmd(cmd)
 	addBranchCmd(cmd)
 	addOutdatedCmd(cmd)
+	addFundingCmd(cmd)
 	addChangelogCmd(cmd)
 	addLicensesCmd(cmd)
 	addIntegrityCmd(cmd)
