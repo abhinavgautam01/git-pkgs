@@ -102,6 +102,8 @@ func (db *DB) CreateSchema() error {
 		homepage TEXT,
 		repository_url TEXT,
 		registry_url TEXT,
+		funding_links TEXT,
+		funding_synced_at DATETIME,
 		supplier_name TEXT,
 		supplier_type TEXT,
 		source TEXT,

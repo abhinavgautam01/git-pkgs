@@ -2,10 +2,11 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/ecosyste-ms/ecosystems-go/packages"
 	"github.com/git-pkgs/git-pkgs/internal/database"
 )
 
@@ -75,7 +76,7 @@ func TestBuildFundingResult(t *testing.T) {
 			ManifestKind: manifestKindLockfile,
 		},
 	}
-	packageData := map[string]*packages.PackageWithRegistry{
+	packageData := map[string]*fundingPackageData{
 		"pkg:npm/express": {
 			FundingLinks: []string{
 				"https://opencollective.com/express",
@@ -120,4 +121,60 @@ func TestBuildFundingResult(t *testing.T) {
 			t.Fatalf("dependency = %q, want lodash", result.Dependencies[0].Name)
 		}
 	})
+}
+
+func TestFetchFundingPackageDataUsesCache(t *testing.T) {
+	db, err := database.Create(filepath.Join(t.TempDir(), "pkgs.sqlite3"))
+	if err != nil {
+		t.Fatalf("create db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	err = db.SavePackageFundingBatch([]database.PackageFundingData{
+		{
+			PURL:      "pkg:npm/express",
+			Ecosystem: "npm",
+			Name:      "express",
+			FundingLinks: []string{
+				"https://opencollective.com/express",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("save funding: %v", err)
+	}
+
+	deps := []database.Dependency{
+		{Name: "express", Ecosystem: "npm", Requirement: "4.18.2", ManifestKind: manifestKindLockfile},
+	}
+	got, err := fetchFundingPackageData(db, deps)
+	if err != nil {
+		t.Fatalf("fetch funding: %v", err)
+	}
+
+	data := got["pkg:npm/express"]
+	if data == nil {
+		t.Fatal("expected cached funding data")
+	}
+	if len(data.FundingLinks) != 1 || data.FundingLinks[0] != "https://opencollective.com/express" {
+		t.Fatalf("funding links = %#v, want cached link", data.FundingLinks)
+	}
+}
+
+func TestOutputFundingJSONEmptyResult(t *testing.T) {
+	var out bytes.Buffer
+	root := NewRootCmd()
+	root.SetOut(&out)
+
+	if err := outputFundingJSON(root, emptyFundingResult()); err != nil {
+		t.Fatalf("output json: %v", err)
+	}
+
+	var result FundingResult
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("parse json: %v; output: %s", err, out.String())
+	}
+	if result.Dependencies == nil {
+		t.Fatal("dependencies = nil, want empty array")
+	}
 }

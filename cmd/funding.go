@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/ecosyste-ms/ecosystems-go"
-	"github.com/ecosyste-ms/ecosystems-go/packages"
+	"github.com/git-pkgs/enrichment"
 	"github.com/git-pkgs/git-pkgs/internal/database"
 	"github.com/git-pkgs/git-pkgs/internal/git"
 	"github.com/git-pkgs/purl"
@@ -53,6 +53,10 @@ type FundingResult struct {
 	Dependencies []FundingEntry `json:"dependencies"`
 }
 
+type fundingPackageData struct {
+	FundingLinks []string
+}
+
 func runFunding(cmd *cobra.Command, args []string) error {
 	commit, _ := cmd.Flags().GetString("commit")
 	branchName, _ := cmd.Flags().GetString("branch")
@@ -83,17 +87,23 @@ func runFunding(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(resolved) == 0 {
+		if format == formatJSON {
+			return outputFundingJSON(cmd, emptyFundingResult())
+		}
 		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No lockfile dependencies found.")
 		return nil
 	}
 
-	packageData, err := fetchFundingPackageData(resolved)
+	packageData, err := fetchFundingPackageData(db, resolved)
 	if err != nil {
 		return fmt.Errorf("looking up funding data: %w", err)
 	}
 
 	result := buildFundingResult(resolved, packageData, showMissing)
 	if len(result.Dependencies) == 0 {
+		if format == formatJSON {
+			return outputFundingJSON(cmd, result)
+		}
 		outputFundingEmpty(cmd, result, showMissing)
 		return nil
 	}
@@ -107,9 +117,10 @@ func runFunding(cmd *cobra.Command, args []string) error {
 	}
 }
 
-func fetchFundingPackageData(deps []database.Dependency) (map[string]*packages.PackageWithRegistry, error) {
+func fetchFundingPackageData(db *database.DB, deps []database.Dependency) (map[string]*fundingPackageData, error) {
 	purls := make([]string, 0, len(deps))
 	seen := make(map[string]bool)
+	purlToDep := make(map[string]database.Dependency)
 	for _, dep := range deps {
 		purlStr := fundingPURLForDependency(dep)
 		if purlStr == "" || seen[purlStr] {
@@ -117,9 +128,91 @@ func fetchFundingPackageData(deps []database.Dependency) (map[string]*packages.P
 		}
 		seen[purlStr] = true
 		purls = append(purls, purlStr)
+		purlToDep[purlStr] = dep
 	}
 	if len(purls) == 0 {
-		return map[string]*packages.PackageWithRegistry{}, nil
+		return map[string]*fundingPackageData{}, nil
+	}
+
+	result := make(map[string]*fundingPackageData, len(purls))
+	var uncached []string
+	if db != nil {
+		cached, err := db.GetCachedPackageFunding(purls, enrichmentCacheTTL)
+		if err != nil {
+			return nil, err
+		}
+		for purlStr, data := range cached {
+			result[purlStr] = &fundingPackageData{FundingLinks: data.FundingLinks}
+		}
+		for _, purlStr := range purls {
+			if _, ok := cached[purlStr]; !ok {
+				uncached = append(uncached, purlStr)
+			}
+		}
+	} else {
+		uncached = purls
+	}
+
+	if len(uncached) == 0 {
+		return result, nil
+	}
+
+	packages, err := fetchFundingMetadata(uncached)
+	if err != nil {
+		return nil, err
+	}
+
+	fundingLookupPURLs := make([]string, 0, len(packages))
+	for purlStr, pkg := range packages {
+		if pkg == nil {
+			continue
+		}
+		result[purlStr] = &fundingPackageData{FundingLinks: []string{}}
+		if fundingLinksFromEcosystems(purlStr, pkg) {
+			fundingLookupPURLs = append(fundingLookupPURLs, purlStr)
+		}
+	}
+
+	fundingLinks, err := fetchFundingLinks(fundingLookupPURLs)
+	if err != nil {
+		return nil, err
+	}
+	for purlStr, links := range fundingLinks {
+		result[purlStr] = &fundingPackageData{FundingLinks: links}
+	}
+
+	saveFundingPackageData(db, purlToDep, packages, result)
+
+	return result, nil
+}
+
+func fetchFundingMetadata(purls []string) (map[string]*enrichment.PackageInfo, error) {
+	client, err := NewEnrichmentClient(enrichment.WithUserAgent("git-pkgs/" + version))
+	if err != nil {
+		return nil, err
+	}
+
+	const fundingLookupTimeout = 60 * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), fundingLookupTimeout)
+	defer cancel()
+
+	return client.BulkLookup(ctx, purls)
+}
+
+func fundingLinksFromEcosystems(purlStr string, pkg *enrichment.PackageInfo) bool {
+	if pkg.Source != "ecosystems" {
+		return false
+	}
+	parsed, err := purl.Parse(purlStr)
+	if err != nil {
+		return false
+	}
+	return !parsed.IsPrivateRegistry()
+}
+
+func fetchFundingLinks(purls []string) (map[string][]string, error) {
+	if len(purls) == 0 {
+		return map[string][]string{}, nil
 	}
 
 	client, err := ecosystems.NewClient("git-pkgs/" + version)
@@ -131,7 +224,61 @@ func fetchFundingPackageData(deps []database.Dependency) (map[string]*packages.P
 	ctx, cancel := context.WithTimeout(context.Background(), fundingLookupTimeout)
 	defer cancel()
 
-	return client.BulkLookup(ctx, purls)
+	packages, err := client.BulkLookup(ctx, purls)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(map[string][]string, len(packages))
+	for purlStr, pkg := range packages {
+		if pkg == nil {
+			continue
+		}
+		result[purlStr] = uniqueStrings(pkg.FundingLinks)
+	}
+	return result, nil
+}
+
+func saveFundingPackageData(
+	db *database.DB,
+	purlToDep map[string]database.Dependency,
+	packages map[string]*enrichment.PackageInfo,
+	fundingData map[string]*fundingPackageData,
+) {
+	if db == nil {
+		return
+	}
+
+	var enrichmentToSave []database.PackageEnrichmentData
+	var fundingToSave []database.PackageFundingData
+	for purlStr, pkg := range packages {
+		if pkg == nil {
+			continue
+		}
+		dep := purlToDep[purlStr]
+		enrichmentToSave = append(enrichmentToSave, database.PackageEnrichmentData{
+			PURL:          purlStr,
+			Ecosystem:     dep.Ecosystem,
+			Name:          dep.Name,
+			LatestVersion: pkg.LatestVersion,
+			License:       pkg.License,
+			RegistryURL:   pkg.RegistryURL,
+			Source:        pkg.Source,
+		})
+		data := fundingData[purlStr]
+		if data == nil {
+			continue
+		}
+		fundingToSave = append(fundingToSave, database.PackageFundingData{
+			PURL:         purlStr,
+			Ecosystem:    dep.Ecosystem,
+			Name:         dep.Name,
+			FundingLinks: data.FundingLinks,
+		})
+	}
+
+	_ = db.SavePackageEnrichmentBatch(enrichmentToSave)
+	_ = db.SavePackageFundingBatch(fundingToSave)
 }
 
 func fundingPURLForDependency(dep database.Dependency) string {
@@ -147,10 +294,10 @@ func fundingPURLForDependency(dep database.Dependency) string {
 
 func buildFundingResult(
 	deps []database.Dependency,
-	packageData map[string]*packages.PackageWithRegistry,
+	packageData map[string]*fundingPackageData,
 	showMissing bool,
 ) *FundingResult {
-	result := &FundingResult{}
+	result := emptyFundingResult()
 	result.Summary.TotalDependencies = len(deps)
 
 	seen := make(map[string]bool)
@@ -204,6 +351,12 @@ func buildFundingResult(
 	})
 
 	return result
+}
+
+func emptyFundingResult() *FundingResult {
+	return &FundingResult{
+		Dependencies: []FundingEntry{},
+	}
 }
 
 func uniqueStrings(values []string) []string {
