@@ -101,7 +101,7 @@ func runMaintainers(cmd *cobra.Command, args []string) error {
 	deps = selectMaintainerDependencies(deps, includeTransitive)
 	if len(deps) == 0 {
 		if includeTransitive {
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No lockfile dependencies found.")
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No dependencies found.")
 		} else {
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No direct dependencies found.")
 		}
@@ -136,7 +136,7 @@ func selectMaintainerDependencies(deps []database.Dependency, includeTransitive 
 	var selected []database.Dependency
 	for _, dep := range deps {
 		if includeTransitive {
-			if isResolvedDependency(dep) {
+			if dep.ManifestKind == "manifest" || isResolvedDependency(dep) {
 				selected = append(selected, dep)
 			}
 			continue
@@ -223,13 +223,11 @@ func buildMaintainersResult(
 	result := &MaintainersResult{}
 	result.Summary.TotalDependencies = len(deps)
 
-	seen := make(map[string]bool)
 	for _, dep := range deps {
 		purlStr := maintainerPURLForDependency(dep)
-		if purlStr == "" || seen[purlStr] {
+		if purlStr == "" {
 			continue
 		}
-		seen[purlStr] = true
 
 		data, ok := lookup[purlStr]
 		if !ok {

@@ -49,11 +49,11 @@ func TestSelectMaintainerDependencies(t *testing.T) {
 	}
 
 	all := selectMaintainerDependencies(deps, true)
-	if len(all) != 2 {
-		t.Fatalf("all deps length = %d, want 2", len(all))
+	if len(all) != 3 {
+		t.Fatalf("all deps length = %d, want 3", len(all))
 	}
-	if all[0].Name != "accepts" || all[1].Name != "go" {
-		t.Fatalf("all deps = %#v, want accepts and go", all)
+	if all[0].Name != "express" || all[1].Name != "accepts" || all[2].Name != "go" {
+		t.Fatalf("all deps = %#v, want express, accepts, and go", all)
 	}
 }
 
@@ -104,30 +104,40 @@ func TestBuildMaintainersResult(t *testing.T) {
 		if result.Summary.TotalDependencies != 4 {
 			t.Fatalf("total dependencies = %d, want 4", result.Summary.TotalDependencies)
 		}
-		if result.Summary.QueriedDependencies != 3 {
-			t.Fatalf("queried dependencies = %d, want 3", result.Summary.QueriedDependencies)
+		if result.Summary.QueriedDependencies != 4 {
+			t.Fatalf("queried dependencies = %d, want 4", result.Summary.QueriedDependencies)
 		}
-		if result.Summary.WithMaintainers != 1 {
-			t.Fatalf("with maintainers = %d, want 1", result.Summary.WithMaintainers)
+		if result.Summary.WithMaintainers != 2 {
+			t.Fatalf("with maintainers = %d, want 2", result.Summary.WithMaintainers)
 		}
 		if result.Summary.WithoutMaintainers != 1 {
 			t.Fatalf("without maintainers = %d, want 1", result.Summary.WithoutMaintainers)
 		}
-		if result.Summary.SingleMaintainer != 1 {
-			t.Fatalf("single maintainer = %d, want 1", result.Summary.SingleMaintainer)
+		if result.Summary.SingleMaintainer != 2 {
+			t.Fatalf("single maintainer = %d, want 2", result.Summary.SingleMaintainer)
 		}
 		if result.Summary.LookupErrors != 1 {
 			t.Fatalf("lookup errors = %d, want 1", result.Summary.LookupErrors)
 		}
-		if len(result.Dependencies) != 3 {
-			t.Fatalf("dependencies length = %d, want 3", len(result.Dependencies))
+		if len(result.Dependencies) != 4 {
+			t.Fatalf("dependencies length = %d, want 4", len(result.Dependencies))
+		}
+
+		manifestPaths := map[string]bool{}
+		for _, dep := range result.Dependencies {
+			if dep.Name == "express" {
+				manifestPaths[dep.ManifestPath] = true
+			}
+		}
+		if !manifestPaths["package.json"] || !manifestPaths["other/package.json"] {
+			t.Fatalf("expected express entries for both manifests, got %#v", result.Dependencies)
 		}
 	})
 
 	t.Run("single maintainer only", func(t *testing.T) {
 		result := buildMaintainersResult(deps, lookup, true)
-		if len(result.Dependencies) != 1 {
-			t.Fatalf("dependencies length = %d, want 1", len(result.Dependencies))
+		if len(result.Dependencies) != 2 {
+			t.Fatalf("dependencies length = %d, want 2", len(result.Dependencies))
 		}
 		if result.Dependencies[0].Name != "express" {
 			t.Fatalf("dependency = %q, want express", result.Dependencies[0].Name)
