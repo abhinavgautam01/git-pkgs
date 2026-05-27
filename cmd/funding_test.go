@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/ecosyste-ms/ecosystems-go/packages"
@@ -31,6 +33,29 @@ func TestFundingPURLForDependency(t *testing.T) {
 			t.Fatalf("funding PURL = %q, want %q", got, want)
 		}
 	})
+}
+
+func TestOutputFundingEmptyNoMetadata(t *testing.T) {
+	result := &FundingResult{
+		Summary: FundingSummary{
+			TotalDependencies:     2,
+			UnresolvedPackageData: 2,
+		},
+	}
+
+	root := NewRootCmd()
+	var buf bytes.Buffer
+	root.SetOut(&buf)
+
+	outputFundingEmpty(root, result, true)
+
+	got := buf.String()
+	if strings.Contains(got, "All checked dependencies have funding links") {
+		t.Fatalf("expected no definitive funding message, got %q", got)
+	}
+	if !strings.Contains(got, "No package metadata resolved for 2 dependencies") {
+		t.Fatalf("expected unresolved metadata message, got %q", got)
+	}
 }
 
 func TestBuildFundingResult(t *testing.T) {

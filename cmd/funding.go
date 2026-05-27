@@ -94,11 +94,7 @@ func runFunding(cmd *cobra.Command, args []string) error {
 
 	result := buildFundingResult(resolved, packageData, showMissing)
 	if len(result.Dependencies) == 0 {
-		if showMissing {
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "All checked dependencies have funding links.")
-		} else {
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No funding links found.")
-		}
+		outputFundingEmpty(cmd, result, showMissing)
 		return nil
 	}
 
@@ -230,6 +226,25 @@ func outputFundingJSON(cmd *cobra.Command, result *FundingResult) error {
 	return enc.Encode(result)
 }
 
+func outputFundingEmpty(cmd *cobra.Command, result *FundingResult, showMissing bool) {
+	if result.Summary.CheckedDependencies == 0 && result.Summary.UnresolvedPackageData > 0 {
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(),
+			"No package metadata resolved for %d dependencies; funding status could not be determined.\n",
+			result.Summary.UnresolvedPackageData)
+		return
+	}
+
+	if showMissing {
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "All checked dependencies have funding links.")
+	} else {
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No funding links found.")
+	}
+	if result.Summary.UnresolvedPackageData > 0 {
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Funding status could not be determined for %d dependencies.\n",
+			result.Summary.UnresolvedPackageData)
+	}
+}
+
 func outputFundingText(cmd *cobra.Command, result *FundingResult, showMissing bool) {
 	if showMissing {
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Found %d dependencies without funding links:\n\n", len(result.Dependencies))
@@ -256,8 +271,9 @@ func outputFundingText(cmd *cobra.Command, result *FundingResult, showMissing bo
 	}
 
 	_, _ = fmt.Fprintln(cmd.OutOrStdout())
-	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Checked: %d, with funding: %d, without funding: %d\n",
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Checked: %d, with funding: %d, without funding: %d, unresolved: %d\n",
 		result.Summary.CheckedDependencies,
 		result.Summary.WithFunding,
-		result.Summary.WithoutFunding)
+		result.Summary.WithoutFunding,
+		result.Summary.UnresolvedPackageData)
 }
