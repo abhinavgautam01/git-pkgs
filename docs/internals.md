@@ -150,7 +150,7 @@ See [vulns.md](vulns.md) for command documentation.
 
 ## Package Enrichment
 
-The `outdated`, `freshness`, `changelog`, `licenses`, `sbom`, and `integrity --registry` commands fetch metadata from external sources. The [`github.com/git-pkgs/enrichment`](https://github.com/git-pkgs/enrichment) library provides a unified interface with two backends:
+The `outdated`, `freshness`, `deprecated`, `changelog`, `licenses`, `sbom`, and `integrity --registry` commands fetch metadata from external sources. The [`github.com/git-pkgs/enrichment`](https://github.com/git-pkgs/enrichment) library provides a unified interface with two backends:
 
 - **ecosyste.ms** - Bulk API queries via [ecosyste-ms/ecosystems-go](https://github.com/ecosyste-ms/ecosystems-go). Efficient for public packages.
 - **registries** - Direct queries to package registries via [git-pkgs/registries](https://github.com/git-pkgs/registries). Required for private registries.
