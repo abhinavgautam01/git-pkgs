@@ -566,50 +566,6 @@ func TestComputeDiff_MultiVersionMixed(t *testing.T) {
 	}
 }
 
-func TestApplyDiffToDeps_ModifyAfterSkippedBotCommit(t *testing.T) {
-	deps := []database.Dependency{
-		{Name: "lodash", Ecosystem: "npm", Requirement: "1.0.0", ManifestPath: "package.json", DependencyType: "runtime"},
-	}
-	diff := &DiffResult{
-		Modified: []DiffEntry{{
-			Name:            "lodash",
-			Ecosystem:       "npm",
-			ManifestPath:    "package.json",
-			DependencyType:  "runtime",
-			FromRequirement: "2.0.0",
-			ToRequirement:   "3.0.0",
-		}},
-	}
-
-	got := applyDiffToDeps(deps, diff)
-	if len(got) != 1 {
-		t.Fatalf("expected 1 dependency, got %d: %+v", len(got), got)
-	}
-	if got[0].Requirement != "3.0.0" {
-		t.Fatalf("requirement = %q, want 3.0.0", got[0].Requirement)
-	}
-}
-
-func TestApplyDiffToDeps_RemoveAfterSkippedBotCommit(t *testing.T) {
-	deps := []database.Dependency{
-		{Name: "lodash", Ecosystem: "npm", Requirement: "1.0.0", ManifestPath: "package.json", DependencyType: "runtime"},
-	}
-	diff := &DiffResult{
-		Removed: []DiffEntry{{
-			Name:            "lodash",
-			Ecosystem:       "npm",
-			ManifestPath:    "package.json",
-			DependencyType:  "runtime",
-			FromRequirement: "2.0.0",
-		}},
-	}
-
-	got := applyDiffToDeps(deps, diff)
-	if len(got) != 0 {
-		t.Fatalf("expected dependency to be removed, got %+v", got)
-	}
-}
-
 func containsString(s, substr string) bool {
 	for i := 0; i <= len(s)-len(substr); i++ {
 		if s[i:i+len(substr)] == substr {

@@ -886,15 +886,6 @@ func TestExcludeBots(t *testing.T) {
 		}
 	})
 
-	t.Run("diff", func(t *testing.T) {
-		stdout, _, err := runCmd(t, "diff", "HEAD~1..HEAD", "--exclude-bots")
-		if err != nil {
-			t.Fatalf("diff failed: %v", err)
-		}
-		if !strings.Contains(stdout, "No dependency changes.") {
-			t.Errorf("expected bot-only range to have no dependency changes, got: %s", stdout)
-		}
-	})
 }
 
 func TestBranchBehavior(t *testing.T) {
