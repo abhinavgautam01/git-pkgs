@@ -233,25 +233,47 @@ func dependencyFromDiffEntry(e DiffEntry) database.Dependency {
 }
 
 func removeDiffEntry(deps []database.Dependency, e DiffEntry) []database.Dependency {
-	for i, d := range deps {
-		if d.Name == e.Name && d.ManifestPath == e.ManifestPath && d.Requirement == e.FromRequirement {
-			return append(deps[:i], deps[i+1:]...)
-		}
+	if i := findDiffEntryIndex(deps, e, true); i >= 0 {
+		return append(deps[:i], deps[i+1:]...)
+	}
+	if i := findDiffEntryIndex(deps, e, false); i >= 0 {
+		return append(deps[:i], deps[i+1:]...)
 	}
 	return deps
 }
 
-func modifyDiffEntry(deps []database.Dependency, e DiffEntry) bool {
-	for i := range deps {
-		d := deps[i]
-		if d.Name == e.Name && d.ManifestPath == e.ManifestPath && d.Requirement == e.FromRequirement {
-			deps[i].Requirement = e.ToRequirement
-			deps[i].Ecosystem = e.Ecosystem
-			deps[i].DependencyType = e.DependencyType
-			return true
+func findDiffEntryIndex(deps []database.Dependency, e DiffEntry, requireVersion bool) int {
+	for i, d := range deps {
+		if !sameDiffEntryPackage(d, e) {
+			continue
 		}
+		if requireVersion && d.Requirement != e.FromRequirement {
+			continue
+		}
+		return i
 	}
-	return false
+	return -1
+}
+
+func sameDiffEntryPackage(d database.Dependency, e DiffEntry) bool {
+	if d.Name != e.Name || d.ManifestPath != e.ManifestPath {
+		return false
+	}
+	return e.Ecosystem == "" || d.Ecosystem == "" || d.Ecosystem == e.Ecosystem
+}
+
+func modifyDiffEntry(deps []database.Dependency, e DiffEntry) bool {
+	i := findDiffEntryIndex(deps, e, true)
+	if i < 0 {
+		i = findDiffEntryIndex(deps, e, false)
+	}
+	if i < 0 {
+		return false
+	}
+	deps[i].Requirement = e.ToRequirement
+	deps[i].Ecosystem = e.Ecosystem
+	deps[i].DependencyType = e.DependencyType
+	return true
 }
 
 // diffWithWorkingTree compares dependencies between a commit and the working tree.
