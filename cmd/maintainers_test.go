@@ -1,0 +1,150 @@
+package cmd
+
+import (
+	"testing"
+
+	"github.com/git-pkgs/git-pkgs/internal/database"
+	"github.com/git-pkgs/registries"
+)
+
+func TestMaintainerPURLForDependency(t *testing.T) {
+	t.Run("builds package PURL without version", func(t *testing.T) {
+		got := maintainerPURLForDependency(database.Dependency{
+			Name:        "serde",
+			Ecosystem:   "cargo",
+			Requirement: "1.0.0",
+		})
+		if got != "pkg:cargo/serde" {
+			t.Fatalf("maintainer PURL = %q, want pkg:cargo/serde", got)
+		}
+	})
+
+	t.Run("strips version from existing PURL", func(t *testing.T) {
+		got := maintainerPURLForDependency(database.Dependency{
+			PURL:        "pkg:npm/%40scope/pkg@1.0.0?repository_url=https://registry.example.test",
+			Name:        "@scope/pkg",
+			Ecosystem:   "npm",
+			Requirement: "1.0.0",
+		})
+		want := "pkg:npm/%40scope/pkg?repository_url=https:%2F%2Fregistry.example.test"
+		if got != want {
+			t.Fatalf("maintainer PURL = %q, want %q", got, want)
+		}
+	})
+}
+
+func TestSelectMaintainerDependencies(t *testing.T) {
+	deps := []database.Dependency{
+		{Name: "express", ManifestKind: "manifest"},
+		{Name: "accepts", Requirement: "1.3.8", ManifestKind: manifestKindLockfile},
+		{Name: "go", Ecosystem: "golang", Requirement: "1.0.0", ManifestKind: "manifest"},
+	}
+
+	direct := selectMaintainerDependencies(deps, false)
+	if len(direct) != 2 {
+		t.Fatalf("direct deps length = %d, want 2", len(direct))
+	}
+	if direct[0].Name != "express" || direct[1].Name != "go" {
+		t.Fatalf("direct deps = %#v, want express and go", direct)
+	}
+
+	all := selectMaintainerDependencies(deps, true)
+	if len(all) != 2 {
+		t.Fatalf("all deps length = %d, want 2", len(all))
+	}
+	if all[0].Name != "accepts" || all[1].Name != "go" {
+		t.Fatalf("all deps = %#v, want accepts and go", all)
+	}
+}
+
+func TestBuildMaintainersResult(t *testing.T) {
+	deps := []database.Dependency{
+		{
+			Name:         "express",
+			Ecosystem:    "npm",
+			Requirement:  "4.18.2",
+			ManifestPath: "package.json",
+			ManifestKind: "manifest",
+		},
+		{
+			Name:         "lodash",
+			Ecosystem:    "npm",
+			Requirement:  "4.17.21",
+			ManifestPath: "package.json",
+			ManifestKind: "manifest",
+		},
+		{
+			Name:         "broken",
+			Ecosystem:    "npm",
+			Requirement:  "1.0.0",
+			ManifestPath: "package.json",
+			ManifestKind: "manifest",
+		},
+		{
+			Name:         "express",
+			Ecosystem:    "npm",
+			Requirement:  "4.18.2",
+			ManifestPath: "other/package.json",
+			ManifestKind: "manifest",
+		},
+	}
+	lookup := map[string]maintainerLookupResult{
+		"pkg:npm/express": {
+			Maintainers: []registries.Maintainer{
+				{Login: "alice"},
+				{Login: "alice"},
+			},
+		},
+		"pkg:npm/lodash": {},
+		"pkg:npm/broken": {Error: "unsupported ecosystem"},
+	}
+
+	t.Run("all packages", func(t *testing.T) {
+		result := buildMaintainersResult(deps, lookup, false)
+		if result.Summary.TotalDependencies != 4 {
+			t.Fatalf("total dependencies = %d, want 4", result.Summary.TotalDependencies)
+		}
+		if result.Summary.QueriedDependencies != 3 {
+			t.Fatalf("queried dependencies = %d, want 3", result.Summary.QueriedDependencies)
+		}
+		if result.Summary.WithMaintainers != 1 {
+			t.Fatalf("with maintainers = %d, want 1", result.Summary.WithMaintainers)
+		}
+		if result.Summary.WithoutMaintainers != 1 {
+			t.Fatalf("without maintainers = %d, want 1", result.Summary.WithoutMaintainers)
+		}
+		if result.Summary.SingleMaintainer != 1 {
+			t.Fatalf("single maintainer = %d, want 1", result.Summary.SingleMaintainer)
+		}
+		if result.Summary.LookupErrors != 1 {
+			t.Fatalf("lookup errors = %d, want 1", result.Summary.LookupErrors)
+		}
+		if len(result.Dependencies) != 3 {
+			t.Fatalf("dependencies length = %d, want 3", len(result.Dependencies))
+		}
+	})
+
+	t.Run("single maintainer only", func(t *testing.T) {
+		result := buildMaintainersResult(deps, lookup, true)
+		if len(result.Dependencies) != 1 {
+			t.Fatalf("dependencies length = %d, want 1", len(result.Dependencies))
+		}
+		if result.Dependencies[0].Name != "express" {
+			t.Fatalf("dependency = %q, want express", result.Dependencies[0].Name)
+		}
+		if result.Dependencies[0].MaintainerCount != 1 {
+			t.Fatalf("maintainer count = %d, want 1", result.Dependencies[0].MaintainerCount)
+		}
+	})
+}
+
+func TestFormatMaintainerNames(t *testing.T) {
+	got := formatMaintainerNames([]MaintainerInfo{
+		{Login: "alice", Role: "owner"},
+		{Name: "Bob"},
+	})
+	want := "alice (owner), Bob"
+	if got != want {
+		t.Fatalf("maintainer names = %q, want %q", got, want)
+	}
+}

@@ -12,7 +12,7 @@ For best results, commit your lockfiles. Manifests show version ranges but lockf
 
 It works across many ecosystems (Gemfile, package.json, Dockerfile, GitHub Actions workflows) giving you one unified history instead of separate tools per ecosystem. The database lives in your `.git` directory where you can use it in CI to catch dependency changes in pull requests.
 
-The core commands (`list`, `history`, `blame`, `diff`, `stale`, etc.) work entirely from your git history with no network access. Additional commands fetch external data: `vulns` checks [OSV](https://osv.dev) for known CVEs, `outdated`, `freshness`, `licenses`, and `funding` query [ecosyste.ms](https://packages.ecosyste.ms/) for registry metadata, `deprecated` checks registries for deprecation metadata, and `changelog` fetches upstream changelogs so you can see what changed between versions.
+The core commands (`list`, `history`, `blame`, `diff`, `stale`, etc.) work entirely from your git history with no network access. Additional commands fetch external data: `vulns` checks [OSV](https://osv.dev) for known CVEs, `outdated`, `freshness`, `licenses`, `funding`, and `maintainers` query [ecosyste.ms](https://packages.ecosyste.ms/) for registry metadata, `deprecated` checks registries for deprecation metadata, and `changelog` fetches upstream changelogs so you can see what changed between versions.
 
 ## Installation
 
@@ -48,6 +48,7 @@ git pkgs outdated       # find packages with newer versions
 git pkgs freshness      # release-age freshness metrics
 git pkgs deprecated     # find deprecated installed versions
 git pkgs funding        # show packages with funding links
+git pkgs maintainers    # show dependency maintainer counts
 git pkgs changelog lodash -e npm --from 4.17.20 --to 4.17.21  # view changelog
 git pkgs update         # update all dependencies
 git pkgs add lodash     # add a package
@@ -295,6 +296,17 @@ git pkgs funding --format=json
 ```
 
 Checks ecosyste.ms package metadata for funding links so you can see which dependencies publish sponsorship information and which ones do not.
+
+### Show maintainer data
+
+```bash
+git pkgs maintainers              # show maintainer counts for direct deps
+git pkgs maintainers --single     # only packages with one maintainer
+git pkgs maintainers --all        # include transitive lockfile deps
+git pkgs maintainers --format=json
+```
+
+Checks package metadata for maintainer data and shows maintainer count plus names or logins. Single-maintainer packages are useful review targets, though they are not inherently unsafe.
 
 ### View changelogs
 
@@ -736,7 +748,7 @@ GIT_PKGS_DIRECT=1 git pkgs outdated  # one-off via environment
 
 By default, git-pkgs uses a hybrid approach: packages with a `repository_url` qualifier in their PURL (indicating a private registry) are queried directly, while public packages go through ecosyste.ms for efficiency.
 
-**Private registries and proxies:** For commands that query registries (`outdated`, `licenses`, SBOM enrichment), git-pkgs extracts registry URLs from lockfiles when available:
+**Private registries and proxies:** For commands that query registries (`outdated`, `licenses`, `maintainers`, SBOM enrichment), git-pkgs extracts registry URLs from lockfiles when available:
 
 - npm: `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `bun.lock` (from `resolved` URLs)
 - pypi: `Pipfile.lock`, `poetry.lock`, `uv.lock` (from source configuration)
