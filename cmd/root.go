@@ -73,6 +73,7 @@ func NewRootCmd() *cobra.Command {
 	addTreeCmd(cmd)
 	addStatsCmd(cmd)
 	addStaleCmd(cmd)
+	addFreshnessCmd(cmd)
 	addBranchCmd(cmd)
 	addOutdatedCmd(cmd)
 	addChangelogCmd(cmd)
