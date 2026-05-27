@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -196,7 +197,7 @@ func loadFreshnessVersions(db *database.DB, deps []database.Dependency) (map[str
 		return result, nil
 	}
 
-	client, err := enrichment.NewClient(enrichment.WithUserAgent("git-pkgs/" + version))
+	client, err := NewEnrichmentClient(enrichment.WithUserAgent("git-pkgs/" + version))
 	if err != nil {
 		return nil, err
 	}
@@ -205,9 +206,11 @@ func loadFreshnessVersions(db *database.DB, deps []database.Dependency) (map[str
 	ctx, cancel := context.WithTimeout(context.Background(), freshnessTimeout)
 	defer cancel()
 
+	var fetchErrors []error
 	for _, purlStr := range missing {
 		versions, err := fetchFreshnessVersions(ctx, client, purlStr)
 		if err != nil {
+			fetchErrors = append(fetchErrors, fmt.Errorf("%s: %w", purlStr, err))
 			continue
 		}
 		if len(versions) == 0 {
@@ -217,6 +220,10 @@ func loadFreshnessVersions(db *database.DB, deps []database.Dependency) (map[str
 		if db != nil {
 			_ = db.SaveVersions(cachedVersionsFromFreshness(purlStr, versions))
 		}
+	}
+	if len(fetchErrors) == len(missing) {
+		return nil, fmt.Errorf("fetching freshness metadata failed for all %d uncached packages: %w",
+			len(missing), errors.Join(fetchErrors...))
 	}
 
 	return result, nil

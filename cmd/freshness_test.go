@@ -2,12 +2,15 @@ package cmd_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/git-pkgs/enrichment"
 	"github.com/git-pkgs/git-pkgs/cmd"
 	"github.com/git-pkgs/git-pkgs/internal/database"
 )
@@ -83,6 +86,52 @@ func TestFreshnessCommand(t *testing.T) {
 			t.Fatalf("jest days behind latest = %d, want 91", result.Dependencies[0].DaysBehindLatest)
 		}
 	})
+}
+
+type failingFreshnessClient struct{}
+
+func (f failingFreshnessClient) BulkLookup(_ context.Context, _ []string) (map[string]*enrichment.PackageInfo, error) {
+	return nil, errors.New("metadata unavailable")
+}
+
+func (f failingFreshnessClient) GetVersions(_ context.Context, _ string) ([]enrichment.VersionInfo, error) {
+	return nil, errors.New("metadata unavailable")
+}
+
+func (f failingFreshnessClient) GetVersion(_ context.Context, _ string) (*enrichment.VersionInfo, error) {
+	return nil, errors.New("metadata unavailable")
+}
+
+func TestFreshnessCommandFailsWhenAllMetadataFetchesFail(t *testing.T) {
+	repoDir := createTestRepo(t)
+	addFileAndCommit(t, repoDir, "package-lock.json", packageLockJSON, "Add lockfile")
+
+	cleanup := chdir(t, repoDir)
+	defer cleanup()
+
+	rootCmd := cmd.NewRootCmd()
+	rootCmd.SetArgs([]string{"init"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	orig := cmd.NewEnrichmentClient
+	cmd.NewEnrichmentClient = func(opts ...enrichment.Option) (enrichment.Client, error) {
+		return failingFreshnessClient{}, nil
+	}
+	defer func() { cmd.NewEnrichmentClient = orig }()
+
+	rootCmd = cmd.NewRootCmd()
+	rootCmd.SetArgs([]string{"freshness"})
+	rootCmd.SetOut(&bytes.Buffer{})
+
+	err := rootCmd.Execute()
+	if err == nil {
+		t.Fatal("expected freshness to fail when all metadata fetches fail")
+	}
+	if !strings.Contains(err.Error(), "fetching freshness metadata failed for all") {
+		t.Fatalf("unexpected error: %v", err)
+	}
 }
 
 func seedFreshnessVersions(t *testing.T, repoDir string) {
