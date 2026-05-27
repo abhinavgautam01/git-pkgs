@@ -25,6 +25,7 @@ Changes are shown in chronological order.`,
 	historyCmd.Flags().String("since", "", "Only changes after this date (YYYY-MM-DD)")
 	historyCmd.Flags().String("until", "", "Only changes before this date (YYYY-MM-DD)")
 	historyCmd.Flags().StringP("format", "f", "text", "Output format: text, json")
+	historyCmd.Flags().Bool("exclude-bots", false, "Exclude changes by bot authors")
 	parent.AddCommand(historyCmd)
 }
 
@@ -45,6 +46,7 @@ func runHistory(cmd *cobra.Command, args []string) error {
 	since, _ := cmd.Flags().GetString("since")
 	until, _ := cmd.Flags().GetString("until")
 	format, _ := cmd.Flags().GetString("format")
+	excludeBots, _ := cmd.Flags().GetBool("exclude-bots")
 
 	repo, err := git.OpenRepository(".")
 	if err != nil {
@@ -74,6 +76,7 @@ func runHistory(cmd *cobra.Command, args []string) error {
 		Author:      author,
 		Since:       since,
 		Until:       until,
+		ExcludeBots: excludeBots,
 	})
 	if err != nil {
 		return fmt.Errorf("getting history: %w", err)

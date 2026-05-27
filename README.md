@@ -121,6 +121,7 @@ git pkgs history                       # all dependency changes
 git pkgs history rails                 # changes for a specific package
 git pkgs history pkg:gem/rails         # same thing, using a PURL
 git pkgs history --author=alice        # filter by author
+git pkgs history --exclude-bots        # hide dependency changes by bot authors
 git pkgs history --since=2024-01-01    # changes after date
 git pkgs history --ecosystem=rubygems  # filter by ecosystem
 ```
@@ -153,6 +154,7 @@ Show who added each current dependency:
 ```bash
 git pkgs blame
 git pkgs blame --ecosystem=rubygems
+git pkgs blame --exclude-bots
 ```
 
 Example output:
@@ -175,6 +177,7 @@ Gemfile (rubygems):
 ```bash
 git pkgs stats
 git pkgs stats --by-author         # who added the most dependencies
+git pkgs stats --exclude-bots      # exclude bot-authored changes
 git pkgs stats --ecosystem=npm     # filter by ecosystem
 git pkgs stats --since=2024-01-01  # changes after date
 git pkgs stats --until=2024-12-31  # changes before date
@@ -403,6 +406,7 @@ git pkgs diff --from=HEAD~10              # HEAD~10 vs working tree
 git pkgs diff main..feature               # compare branches
 git pkgs diff --type=development          # only dev dependency changes
 git pkgs diff --ecosystem=npm             # filter by ecosystem
+git pkgs diff main..feature --exclude-bots # ignore bot-authored commits
 ```
 
 With no arguments, compares HEAD against the working tree (like `git diff`). Shows added, removed, and modified packages with version info.
@@ -485,6 +489,7 @@ Searches the database for dependencies whose names match the given pattern. Show
 ```bash
 git pkgs log                  # recent commits with dependency changes
 git pkgs log --author=alice   # filter by author
+git pkgs log --exclude-bots   # hide bot-authored commits
 git pkgs log -n 50            # show more commits
 ```
 

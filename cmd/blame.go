@@ -20,6 +20,7 @@ func addBlameCmd(parent *cobra.Command) {
 	blameCmd.Flags().StringP("branch", "b", "", "Branch to query (default: first tracked branch)")
 	blameCmd.Flags().StringP("ecosystem", "e", "", "Filter by ecosystem")
 	blameCmd.Flags().StringP("format", "f", "text", "Output format: text, json")
+	blameCmd.Flags().Bool("exclude-bots", false, "Exclude dependencies first added by bot authors")
 	parent.AddCommand(blameCmd)
 }
 
@@ -27,6 +28,7 @@ func runBlame(cmd *cobra.Command, args []string) error {
 	branchName, _ := cmd.Flags().GetString("branch")
 	ecosystem, _ := cmd.Flags().GetString("ecosystem")
 	format, _ := cmd.Flags().GetString("format")
+	excludeBots, _ := cmd.Flags().GetBool("exclude-bots")
 
 	_, db, err := openDatabase()
 	if err != nil {
@@ -39,7 +41,11 @@ func runBlame(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	entries, err := db.GetBlame(branchInfo.ID, ecosystem)
+	entries, err := db.GetBlame(database.BlameOptions{
+		BranchID:    branchInfo.ID,
+		Ecosystem:   ecosystem,
+		ExcludeBots: excludeBots,
+	})
 	if err != nil {
 		return fmt.Errorf("getting blame: %w", err)
 	}

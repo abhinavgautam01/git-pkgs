@@ -25,6 +25,7 @@ func addStatsCmd(parent *cobra.Command) {
 	statsCmd.Flags().IntP("limit", "n", defaultStatsLimit, "Number of top items to show")
 	statsCmd.Flags().StringP("format", "f", "text", "Output format: text, json")
 	statsCmd.Flags().Bool("by-author", false, "Show detailed per-author statistics")
+	statsCmd.Flags().Bool("exclude-bots", false, "Exclude changes by bot authors")
 	parent.AddCommand(statsCmd)
 }
 
@@ -36,6 +37,7 @@ func runStats(cmd *cobra.Command, args []string) error {
 	limit, _ := cmd.Flags().GetInt("limit")
 	format, _ := cmd.Flags().GetString("format")
 	byAuthor, _ := cmd.Flags().GetBool("by-author")
+	excludeBots, _ := cmd.Flags().GetBool("exclude-bots")
 
 	_, db, err := openDatabase()
 	if err != nil {
@@ -49,11 +51,12 @@ func runStats(cmd *cobra.Command, args []string) error {
 	}
 
 	opts := database.StatsOptions{
-		BranchID:  branchInfo.ID,
-		Ecosystem: ecosystem,
-		Since:     since,
-		Until:     until,
-		Limit:     limit,
+		BranchID:    branchInfo.ID,
+		Ecosystem:   ecosystem,
+		Since:       since,
+		Until:       until,
+		Limit:       limit,
+		ExcludeBots: excludeBots,
 	}
 
 	if byAuthor {

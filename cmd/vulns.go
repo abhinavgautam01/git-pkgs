@@ -1254,7 +1254,10 @@ func runVulnsBlame(cmd *cobra.Command, args []string) error {
 	}
 
 	// Get blame information for each vulnerable package
-	blameData, err := db.GetBlame(branch.ID, ecosystem)
+	blameData, err := db.GetBlame(database.BlameOptions{
+		BranchID:  branch.ID,
+		Ecosystem: ecosystem,
+	})
 	if err != nil {
 		return fmt.Errorf("getting blame data: %w", err)
 	}
@@ -1732,7 +1735,10 @@ func runVulnsExposure(cmd *cobra.Command, args []string) error {
 	}
 
 	// Get blame info to find when each package was introduced
-	blameData, err := db.GetBlame(branch.ID, ecosystem)
+	blameData, err := db.GetBlame(database.BlameOptions{
+		BranchID:  branch.ID,
+		Ecosystem: ecosystem,
+	})
 	if err != nil {
 		return fmt.Errorf("getting blame data: %w", err)
 	}

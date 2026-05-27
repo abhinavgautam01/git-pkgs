@@ -15,6 +15,8 @@ const (
 	filterCommittedBefore = " AND c.committed_at <= ?"
 )
 
+var knownBotAuthorNeedles = []string{"[bot]", "dependabot", "renovate", "greenkeeper"}
+
 // Change type values
 const (
 	changeAdded    = "added"
@@ -389,12 +391,37 @@ type CommitWithChanges struct {
 }
 
 type LogOptions struct {
-	BranchID  int64
-	Ecosystem string
-	Author    string
-	Since     string
-	Until     string
-	Limit     int
+	BranchID    int64
+	Ecosystem   string
+	Author      string
+	Since       string
+	Until       string
+	Limit       int
+	ExcludeBots bool
+}
+
+func IsBotAuthor(name, email string) bool {
+	author := strings.ToLower(name + " " + email)
+	for _, needle := range knownBotAuthorNeedles {
+		if strings.Contains(author, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func appendExcludeBotsFilter(query string, args []any) (string, []any) {
+	query += " AND NOT ("
+	for i, needle := range knownBotAuthorNeedles {
+		if i > 0 {
+			query += " OR "
+		}
+		query += "LOWER(COALESCE(c.author_name, '')) LIKE ? OR LOWER(COALESCE(c.author_email, '')) LIKE ?"
+		pattern := "%" + strings.ToLower(needle) + "%"
+		args = append(args, pattern, pattern)
+	}
+	query += ")"
+	return query, args
 }
 
 func (db *DB) GetCommitsWithChanges(opts LogOptions) ([]CommitWithChanges, error) {
@@ -415,6 +442,9 @@ func (db *DB) GetCommitsWithChanges(opts LogOptions) ([]CommitWithChanges, error
 		query += " AND (c.author_name LIKE ? OR c.author_email LIKE ?)"
 		pattern := "%" + opts.Author + "%"
 		args = append(args, pattern, pattern)
+	}
+	if opts.ExcludeBots {
+		query, args = appendExcludeBotsFilter(query, args)
 	}
 	if opts.Since != "" {
 		query += filterCommittedAfter
@@ -517,6 +547,7 @@ type HistoryOptions struct {
 	Author      string
 	Since       string
 	Until       string
+	ExcludeBots bool
 }
 
 type BlameEntry struct {
@@ -528,6 +559,12 @@ type BlameEntry struct {
 	AuthorName   string `json:"author_name"`
 	AuthorEmail  string `json:"author_email"`
 	CommittedAt  string `json:"committed_at"`
+}
+
+type BlameOptions struct {
+	BranchID    int64
+	Ecosystem   string
+	ExcludeBots bool
 }
 
 type WhyResult struct {
@@ -577,11 +614,12 @@ type AuthorStats struct {
 }
 
 type StatsOptions struct {
-	BranchID  int64
-	Ecosystem string
-	Since     string
-	Until     string
-	Limit     int
+	BranchID    int64
+	Ecosystem   string
+	Since       string
+	Until       string
+	Limit       int
+	ExcludeBots bool
 }
 
 type StaleEntry struct {
@@ -785,6 +823,9 @@ func (db *DB) GetStats(opts StatsOptions) (*Stats, error) {
 		query += filterEcosystem
 		args = append(args, opts.Ecosystem)
 	}
+	if opts.ExcludeBots {
+		query, args = appendExcludeBotsFilter(query, args)
+	}
 	if opts.Since != "" {
 		query += filterCommittedAfter
 		args = append(args, opts.Since)
@@ -856,6 +897,9 @@ func (db *DB) GetStats(opts StatsOptions) (*Stats, error) {
 		query += filterEcosystem
 		args = append(args, opts.Ecosystem)
 	}
+	if opts.ExcludeBots {
+		query, args = appendExcludeBotsFilter(query, args)
+	}
 	if opts.Since != "" {
 		query += filterCommittedAfter
 		args = append(args, opts.Since)
@@ -900,6 +944,9 @@ func (db *DB) GetStats(opts StatsOptions) (*Stats, error) {
 		query += filterEcosystem
 		args = append(args, opts.Ecosystem)
 	}
+	if opts.ExcludeBots {
+		query, args = appendExcludeBotsFilter(query, args)
+	}
 	if opts.Since != "" {
 		query += filterCommittedAfter
 		args = append(args, opts.Since)
@@ -937,6 +984,9 @@ func (db *DB) GetStats(opts StatsOptions) (*Stats, error) {
 	if opts.Ecosystem != "" {
 		query += filterEcosystem
 		args = append(args, opts.Ecosystem)
+	}
+	if opts.ExcludeBots {
+		query, args = appendExcludeBotsFilter(query, args)
 	}
 	if opts.Since != "" {
 		query += filterCommittedAfter
@@ -988,6 +1038,9 @@ func (db *DB) GetAuthorStats(opts StatsOptions) ([]AuthorStats, error) {
 	if opts.Ecosystem != "" {
 		query += filterEcosystem
 		args = append(args, opts.Ecosystem)
+	}
+	if opts.ExcludeBots {
+		query, args = appendExcludeBotsFilter(query, args)
 	}
 	if opts.Since != "" {
 		query += filterCommittedAfter
@@ -1168,7 +1221,7 @@ func (db *DB) GetWhy(branchID int64, packageName, ecosystem string) (*WhyResult,
 	return &r, nil
 }
 
-func (db *DB) GetBlame(branchID int64, ecosystem string) ([]BlameEntry, error) {
+func (db *DB) GetBlame(opts BlameOptions) ([]BlameEntry, error) {
 	// For each current dependency, find the commit that added it
 	// Uses correlated subquery instead of JOIN for branch_commits lookup
 	// to force SQLite to use the (branch_id, position) index properly
@@ -1204,11 +1257,15 @@ func (db *DB) GetBlame(branchID int64, ecosystem string) ([]BlameEntry, error) {
 			WHERE bc.branch_id = ? AND bc.position = fa.first_pos
 		)
 	`
-	args := []any{branchID, branchID, branchID, branchID}
+	args := []any{opts.BranchID, opts.BranchID, opts.BranchID, opts.BranchID}
 
-	if ecosystem != "" {
-		query += " WHERE cd.ecosystem = ?"
-		args = append(args, ecosystem)
+	query += " WHERE 1=1"
+	if opts.Ecosystem != "" {
+		query += " AND cd.ecosystem = ?"
+		args = append(args, opts.Ecosystem)
+	}
+	if opts.ExcludeBots {
+		query, args = appendExcludeBotsFilter(query, args)
 	}
 
 	query += " ORDER BY cd.manifest_path, cd.name"
@@ -1272,6 +1329,9 @@ func (db *DB) GetPackageHistory(opts HistoryOptions) ([]HistoryEntry, error) {
 		query += " AND (c.author_name LIKE ? OR c.author_email LIKE ?)"
 		pattern := "%" + opts.Author + "%"
 		args = append(args, pattern, pattern)
+	}
+	if opts.ExcludeBots {
+		query, args = appendExcludeBotsFilter(query, args)
 	}
 	if opts.Since != "" {
 		query += filterCommittedAfter

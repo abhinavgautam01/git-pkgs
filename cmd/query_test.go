@@ -818,6 +818,85 @@ func TestHistoryCommand(t *testing.T) {
 	})
 }
 
+func TestExcludeBots(t *testing.T) {
+	repoDir := createTestRepo(t)
+	setGitUser(t, repoDir, "Human User", "human@example.com")
+	addFileAndCommit(t, repoDir, "package.json", `{"dependencies":{"lodash":"1.0.0"}}`, "Add lodash")
+	setGitUser(t, repoDir, "dependabot[bot]", "49699333+dependabot[bot]@users.noreply.github.com")
+	addFileAndCommit(t, repoDir, "package.json", `{"dependencies":{"lodash":"1.0.0","axios":"1.0.0"}}`, "Add axios")
+
+	cleanup := chdir(t, repoDir)
+	defer cleanup()
+
+	rootCmd := cmd.NewRootCmd()
+	rootCmd.SetArgs([]string{"init"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	t.Run("log", func(t *testing.T) {
+		stdout, _, err := runCmd(t, "log", "--exclude-bots")
+		if err != nil {
+			t.Fatalf("log failed: %v", err)
+		}
+		if strings.Contains(stdout, "Add axios") {
+			t.Errorf("expected bot commit to be excluded, got: %s", stdout)
+		}
+		if !strings.Contains(stdout, "Add lodash") {
+			t.Errorf("expected human commit in output, got: %s", stdout)
+		}
+	})
+
+	t.Run("history", func(t *testing.T) {
+		stdout, _, err := runCmd(t, "history", "--exclude-bots")
+		if err != nil {
+			t.Fatalf("history failed: %v", err)
+		}
+		if strings.Contains(stdout, "axios") {
+			t.Errorf("expected bot-authored dependency change to be excluded, got: %s", stdout)
+		}
+		if !strings.Contains(stdout, "lodash") {
+			t.Errorf("expected human-authored dependency change in output, got: %s", stdout)
+		}
+	})
+
+	t.Run("stats by author", func(t *testing.T) {
+		stdout, _, err := runCmd(t, "stats", "--by-author", "--exclude-bots")
+		if err != nil {
+			t.Fatalf("stats failed: %v", err)
+		}
+		if strings.Contains(stdout, "dependabot") {
+			t.Errorf("expected bot author to be excluded, got: %s", stdout)
+		}
+		if !strings.Contains(stdout, "Human User") {
+			t.Errorf("expected human author in output, got: %s", stdout)
+		}
+	})
+
+	t.Run("blame", func(t *testing.T) {
+		stdout, _, err := runCmd(t, "blame", "--exclude-bots")
+		if err != nil {
+			t.Fatalf("blame failed: %v", err)
+		}
+		if strings.Contains(stdout, "axios") {
+			t.Errorf("expected bot-added dependency to be excluded, got: %s", stdout)
+		}
+		if !strings.Contains(stdout, "lodash") {
+			t.Errorf("expected human-added dependency in output, got: %s", stdout)
+		}
+	})
+
+	t.Run("diff", func(t *testing.T) {
+		stdout, _, err := runCmd(t, "diff", "HEAD~1..HEAD", "--exclude-bots")
+		if err != nil {
+			t.Fatalf("diff failed: %v", err)
+		}
+		if !strings.Contains(stdout, "No dependency changes.") {
+			t.Errorf("expected bot-only range to have no dependency changes, got: %s", stdout)
+		}
+	})
+}
+
 func TestBranchBehavior(t *testing.T) {
 	t.Run("list works on feature branch", func(t *testing.T) {
 		repoDir := createTestRepo(t)

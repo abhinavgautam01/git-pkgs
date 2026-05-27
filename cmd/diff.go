@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"os/exec"
 	"sort"
 	"strings"
 
@@ -28,6 +29,7 @@ Supports range syntax (main..feature) or explicit --from/--to flags.`,
 	diffCmd.Flags().StringP("ecosystem", "e", "", "Filter by ecosystem")
 	diffCmd.Flags().StringP("type", "t", "", "Filter by dependency type (runtime, development, etc.)")
 	diffCmd.Flags().StringP("format", "f", "text", "Output format: text, json")
+	diffCmd.Flags().Bool("exclude-bots", false, "Exclude changes by bot authors")
 	parent.AddCommand(diffCmd)
 }
 
@@ -53,6 +55,7 @@ func runDiff(cmd *cobra.Command, args []string) error {
 	depType, _ := cmd.Flags().GetString("type")
 	format, _ := cmd.Flags().GetString("format")
 	includeSubmodules, _ := cmd.Flags().GetBool("include-submodules")
+	excludeBots, _ := cmd.Flags().GetBool("exclude-bots")
 
 	// Parse range syntax if provided
 	if len(args) > 0 {
@@ -81,9 +84,12 @@ func runDiff(cmd *cobra.Command, args []string) error {
 	// When comparing to working tree, use direct parsing since there's
 	// no database state for uncommitted changes
 	if toRef == "" {
+		if excludeBots {
+			return fmt.Errorf("--exclude-bots requires a commit-to-commit diff")
+		}
 		result, err = diffWithWorkingTree(repo, fromRef, includeSubmodules)
 	} else {
-		result, err = diffBetweenCommits(repo, fromRef, toRef)
+		result, err = diffBetweenCommits(repo, fromRef, toRef, excludeBots)
 	}
 	if err != nil {
 		return err
@@ -109,10 +115,18 @@ func runDiff(cmd *cobra.Command, args []string) error {
 }
 
 // diffBetweenCommits compares dependencies between two commits using on-demand indexing.
-func diffBetweenCommits(repo *git.Repository, fromRef, toRef string) (*DiffResult, error) {
+func diffBetweenCommits(repo *git.Repository, fromRef, toRef string, excludeBots bool) (*DiffResult, error) {
 	fromDeps, err := repo.GetDependencies(fromRef, "")
 	if err != nil {
 		return nil, fmt.Errorf("getting deps at %s: %w", fromRef, err)
+	}
+
+	if excludeBots {
+		toDeps, err := depsAfterNonBotCommits(repo, fromRef, toRef, fromDeps)
+		if err != nil {
+			return nil, err
+		}
+		return computeDiff(fromDeps, toDeps), nil
 	}
 
 	toDeps, err := repo.GetDependencies(toRef, "")
@@ -121,6 +135,123 @@ func diffBetweenCommits(repo *git.Repository, fromRef, toRef string) (*DiffResul
 	}
 
 	return computeDiff(fromDeps, toDeps), nil
+}
+
+type diffCommit struct {
+	SHA       string
+	Author    string
+	Email     string
+	ParentSHA string
+}
+
+func depsAfterNonBotCommits(repo *git.Repository, fromRef, toRef string, fromDeps []database.Dependency) ([]database.Dependency, error) {
+	commits, err := commitsInRange(repo, fromRef, toRef)
+	if err != nil {
+		return nil, err
+	}
+
+	deps := append([]database.Dependency(nil), fromDeps...)
+	for _, c := range commits {
+		if database.IsBotAuthor(c.Author, c.Email) {
+			continue
+		}
+
+		var parentDeps []database.Dependency
+		if c.ParentSHA != "" {
+			parentDeps, err = repo.GetDependencies(c.ParentSHA, "")
+			if err != nil {
+				return nil, fmt.Errorf("getting deps at %s: %w", c.ParentSHA, err)
+			}
+		}
+
+		commitDeps, err := repo.GetDependencies(c.SHA, "")
+		if err != nil {
+			return nil, fmt.Errorf("getting deps at %s: %w", c.SHA, err)
+		}
+
+		deps = applyDiffToDeps(deps, computeDiff(parentDeps, commitDeps))
+	}
+
+	return deps, nil
+}
+
+func commitsInRange(repo *git.Repository, fromRef, toRef string) ([]diffCommit, error) {
+	gitCmd := exec.Command("git", "log", "--reverse", "--format=%H%x00%an%x00%ae%x00%P%x1e", fromRef+".."+toRef)
+	gitCmd.Dir = repo.WorkDir()
+	out, err := gitCmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("listing commits in %s..%s: %w", fromRef, toRef, err)
+	}
+
+	var commits []diffCommit
+	for _, record := range strings.Split(strings.TrimSuffix(string(out), "\x1e\n"), "\x1e") {
+		record = strings.Trim(record, "\n")
+		if record == "" {
+			continue
+		}
+		parts := strings.Split(record, "\x00")
+		if len(parts) < 4 {
+			continue
+		}
+		parentSHA := ""
+		if parents := strings.Fields(parts[3]); len(parents) > 0 {
+			parentSHA = parents[0]
+		}
+		commits = append(commits, diffCommit{
+			SHA:       parts[0],
+			Author:    parts[1],
+			Email:     parts[2],
+			ParentSHA: parentSHA,
+		})
+	}
+	return commits, nil
+}
+
+func applyDiffToDeps(deps []database.Dependency, diff *DiffResult) []database.Dependency {
+	for _, e := range diff.Removed {
+		deps = removeDiffEntry(deps, e)
+	}
+	for _, e := range diff.Modified {
+		if !modifyDiffEntry(deps, e) {
+			deps = append(deps, dependencyFromDiffEntry(e))
+		}
+	}
+	for _, e := range diff.Added {
+		deps = append(deps, dependencyFromDiffEntry(e))
+	}
+	return deps
+}
+
+func dependencyFromDiffEntry(e DiffEntry) database.Dependency {
+	return database.Dependency{
+		Name:           e.Name,
+		Ecosystem:      e.Ecosystem,
+		Requirement:    e.ToRequirement,
+		ManifestPath:   e.ManifestPath,
+		DependencyType: e.DependencyType,
+	}
+}
+
+func removeDiffEntry(deps []database.Dependency, e DiffEntry) []database.Dependency {
+	for i, d := range deps {
+		if d.Name == e.Name && d.ManifestPath == e.ManifestPath && d.Requirement == e.FromRequirement {
+			return append(deps[:i], deps[i+1:]...)
+		}
+	}
+	return deps
+}
+
+func modifyDiffEntry(deps []database.Dependency, e DiffEntry) bool {
+	for i := range deps {
+		d := deps[i]
+		if d.Name == e.Name && d.ManifestPath == e.ManifestPath && d.Requirement == e.FromRequirement {
+			deps[i].Requirement = e.ToRequirement
+			deps[i].Ecosystem = e.Ecosystem
+			deps[i].DependencyType = e.DependencyType
+			return true
+		}
+	}
+	return false
 }
 
 // diffWithWorkingTree compares dependencies between a commit and the working tree.
