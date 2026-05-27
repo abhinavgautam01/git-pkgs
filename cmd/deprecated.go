@@ -70,6 +70,9 @@ func runDeprecated(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(resolved) == 0 {
+		if format == formatJSON {
+			return outputDeprecatedJSON(cmd, []DeprecatedPackage{})
+		}
 		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No resolved dependencies found.")
 		return nil
 	}
@@ -87,9 +90,12 @@ func runDeprecated(cmd *cobra.Command, args []string) error {
 		purlToDeps[purlStr] = append(purlToDeps[purlStr], dep)
 	}
 
-	versionData := fetchDeprecatedVersionData(versionedPURLs)
+	versionData := fetchDeprecatedVersionData(db, versionedPURLs)
 	deprecated := deprecatedPackages(purlToDeps, versionData)
 	if len(deprecated) == 0 {
+		if format == formatJSON {
+			return outputDeprecatedJSON(cmd, []DeprecatedPackage{})
+		}
 		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No deprecated dependencies found.")
 		return nil
 	}
@@ -116,16 +122,126 @@ func versionedPURLForDependency(dep database.Dependency) string {
 	return purl.MakePURLString(dep.Ecosystem, dep.Name, dep.Requirement)
 }
 
-func fetchDeprecatedVersionData(versionedPURLs []string) map[string]*registries.Version {
+func fetchDeprecatedVersionData(db *database.DB, versionedPURLs []string) map[string]*registries.Version {
 	if len(versionedPURLs) == 0 {
 		return map[string]*registries.Version{}
+	}
+
+	versionData := cachedDeprecatedVersionData(db, versionedPURLs)
+	misses := missingVersionedPURLs(versionedPURLs, versionData)
+	if len(misses) == 0 {
+		return versionData
 	}
 
 	const deprecatedLookupTimeout = 60 * time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), deprecatedLookupTimeout)
 	defer cancel()
 
-	return registries.BulkFetchVersions(ctx, versionedPURLs, nil)
+	fetched := registries.BulkFetchVersions(ctx, misses, nil)
+	for purlStr, version := range fetched {
+		versionData[purlStr] = version
+	}
+	saveDeprecatedVersionData(db, fetched)
+
+	return versionData
+}
+
+func cachedDeprecatedVersionData(db *database.DB, versionedPURLs []string) map[string]*registries.Version {
+	result := make(map[string]*registries.Version)
+	if db == nil {
+		return result
+	}
+
+	staleThreshold := time.Now().Add(-enrichmentCacheTTL)
+	for _, packagePURL := range uniquePackagePURLs(versionedPURLs) {
+		cachedVersions, err := db.GetCachedVersions(packagePURL, enrichmentCacheTTL)
+		if err != nil {
+			continue
+		}
+		for _, cached := range cachedVersions {
+			if cached.StatusCheckedAt.IsZero() || cached.StatusCheckedAt.Before(staleThreshold) {
+				continue
+			}
+			result[cached.PURL] = &registries.Version{
+				Number:      versionFromPURL(cached.PURL),
+				PublishedAt: cached.PublishedAt,
+				Licenses:    cached.License,
+				Status:      registries.VersionStatus(cached.Status),
+				Metadata:    cached.Metadata,
+			}
+		}
+	}
+
+	return result
+}
+
+func missingVersionedPURLs(versionedPURLs []string, versionData map[string]*registries.Version) []string {
+	misses := make([]string, 0)
+	for _, purlStr := range versionedPURLs {
+		if _, ok := versionData[purlStr]; !ok {
+			misses = append(misses, purlStr)
+		}
+	}
+	return misses
+}
+
+func uniquePackagePURLs(versionedPURLs []string) []string {
+	seen := make(map[string]bool)
+	var packagePURLs []string
+	for _, purlStr := range versionedPURLs {
+		packagePURL := packagePURLFromVersioned(purlStr)
+		if packagePURL == "" || seen[packagePURL] {
+			continue
+		}
+		seen[packagePURL] = true
+		packagePURLs = append(packagePURLs, packagePURL)
+	}
+	return packagePURLs
+}
+
+func packagePURLFromVersioned(purlStr string) string {
+	parsed, err := purl.Parse(purlStr)
+	if err != nil {
+		return ""
+	}
+	return parsed.WithoutVersion().String()
+}
+
+func versionFromPURL(purlStr string) string {
+	parsed, err := purl.Parse(purlStr)
+	if err != nil {
+		return ""
+	}
+	return parsed.Version
+}
+
+func saveDeprecatedVersionData(db *database.DB, versionData map[string]*registries.Version) {
+	if db == nil || len(versionData) == 0 {
+		return
+	}
+
+	checkedAt := time.Now()
+	toCache := make([]database.CachedVersion, 0, len(versionData))
+	for purlStr, version := range versionData {
+		if version == nil {
+			continue
+		}
+		packagePURL := packagePURLFromVersioned(purlStr)
+		if packagePURL == "" {
+			continue
+		}
+		toCache = append(toCache, database.CachedVersion{
+			PURL:            purlStr,
+			PackagePURL:     packagePURL,
+			License:         version.Licenses,
+			PublishedAt:     version.PublishedAt,
+			Status:          string(version.Status),
+			StatusCheckedAt: checkedAt,
+			Metadata:        version.Metadata,
+		})
+	}
+
+	_ = db.SaveVersions(toCache)
 }
 
 func deprecatedPackages(

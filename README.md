@@ -12,7 +12,7 @@ For best results, commit your lockfiles. Manifests show version ranges but lockf
 
 It works across many ecosystems (Gemfile, package.json, Dockerfile, GitHub Actions workflows) giving you one unified history instead of separate tools per ecosystem. The database lives in your `.git` directory where you can use it in CI to catch dependency changes in pull requests.
 
-The core commands (`list`, `history`, `blame`, `diff`, `stale`, etc.) work entirely from your git history with no network access. Additional commands fetch external data: `vulns` checks [OSV](https://osv.dev) for known CVEs, `outdated` and `licenses` use enrichment metadata, `deprecated` checks registry metadata, and `changelog` fetches upstream changelogs so you can see what changed between versions.
+The core commands (`list`, `history`, `blame`, `diff`, `stale`, etc.) work entirely from your git history with no network access. Additional commands fetch external data: `vulns` checks [OSV](https://osv.dev) for known CVEs, `outdated` and `licenses` query [ecosyste.ms](https://packages.ecosyste.ms/) for registry metadata, `deprecated` checks registries for deprecation metadata, and `changelog` fetches upstream changelogs so you can see what changed between versions.
 
 ## Installation
 

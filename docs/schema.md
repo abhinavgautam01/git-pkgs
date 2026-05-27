@@ -151,6 +151,9 @@ Stores per-version metadata for packages.
 | license | text | License for this specific version |
 | published_at | datetime | When this version was published |
 | integrity | text | Integrity hash (e.g., SHA256) |
+| status | text | Version status, such as deprecated or yanked |
+| status_checked_at | datetime | When version status was last fetched |
+| metadata | text | JSON-encoded registry metadata for this version |
 | source | text | Data source |
 | enriched_at | datetime | When metadata was fetched |
 | created_at | datetime | |

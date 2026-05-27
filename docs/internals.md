@@ -2,7 +2,7 @@
 
 git-pkgs walks a repository's commit history, parses manifest files at each commit, and stores dependency changes in a SQLite database. This lets you query what changed, when, and who did it.
 
-The tool works with two types of data. Intrinsic data comes from your git history: dependency names, versions from manifests, who added them, when, and why. Commands like `list`, `history`, `blame`, `diff`, and `stale` use only intrinsic data and require no network access. Extrinsic data comes from external sources: vulnerability info from [OSV](https://osv.dev), and registry metadata (latest versions, licenses) from [ecosyste.ms](https://packages.ecosyste.ms/). Commands like `vulns`, `outdated`, and `licenses` fetch and cache this external data.
+The tool works with two types of data. Intrinsic data comes from your git history: dependency names, versions from manifests, who added them, when, and why. Commands like `list`, `history`, `blame`, `diff`, and `stale` use only intrinsic data and require no network access. Extrinsic data comes from external sources: vulnerability info from [OSV](https://osv.dev), and registry metadata (latest versions, licenses, deprecation status) from [ecosyste.ms](https://packages.ecosyste.ms/) and package registries. Commands like `vulns`, `outdated`, `licenses`, and `deprecated` fetch and cache this external data.
 
 ## Package Structure
 
@@ -37,7 +37,7 @@ The schema has eleven tables. Six handle dependency tracking:
 Four support vulnerability scanning and package enrichment:
 
 - `packages` caches package metadata and vulnerability sync status
-- `versions` stores per-version metadata (license, published date) for time-travel queries
+- `versions` stores per-version metadata (license, published date, deprecation status) for time-travel queries and external metadata commands
 - `vulnerabilities` caches CVE/GHSA data fetched from OSV
 - `vulnerability_packages` maps which packages are affected by each vulnerability
 
@@ -157,9 +157,7 @@ The `outdated`, `freshness`, `deprecated`, `changelog`, `licenses`, `sbom`, and 
 
 By default, a hybrid approach routes requests based on PURL qualifiers: packages with a `repository_url` qualifier (indicating a private registry) go directly to that registry, while public packages go through ecosyste.ms. Set `git config pkgs.direct true` or `GIT_PKGS_DIRECT=1` to skip ecosyste.ms and query all registries directly.
 
-Data is cached in the `packages` and `versions` tables with a 24-hour TTL. The `packages` table stores provenance: `repository_url` (the registry queried) and `source` (ecosystems or registries).
-
-The `deprecated` command uses [`github.com/git-pkgs/registries`](https://github.com/git-pkgs/registries) directly to check exact installed versions for registry deprecation status.
+Data is cached in the `packages` and `versions` tables with a 24-hour TTL. The `packages` table stores provenance: `repository_url` (the registry queried) and `source` (ecosystems or registries). The `deprecated` command uses the same `versions` cache and fetches exact-version status from registries when cached deprecation metadata is missing.
 
 ## Package Management
 
