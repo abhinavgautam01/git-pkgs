@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/git-pkgs/git-pkgs/internal/database"
@@ -398,6 +399,64 @@ func TestComputeDiff_Modified(t *testing.T) {
 	}
 	if result.Removed[0].Name != "express" {
 		t.Errorf("expected removed entry for express, got %s", result.Removed[0].Name)
+	}
+}
+
+func TestDiffStat(t *testing.T) {
+	result := &DiffResult{
+		Added: []DiffEntry{
+			{Name: "axios"},
+			{Name: "zod"},
+		},
+		Removed: []DiffEntry{
+			{Name: "request"},
+		},
+		Modified: []DiffEntry{
+			{Name: "major", FromRequirement: "1.0.0", ToRequirement: "2.0.0"},
+			{Name: "minor", FromRequirement: "1.0.0", ToRequirement: "1.1.0"},
+			{Name: "patch", FromRequirement: "1.0.0", ToRequirement: "1.0.1"},
+		},
+	}
+
+	stat := buildDiffStat(result)
+	if stat.Added != 2 {
+		t.Fatalf("added = %d, want 2", stat.Added)
+	}
+	if stat.Removed != 1 {
+		t.Fatalf("removed = %d, want 1", stat.Removed)
+	}
+	if stat.Updated != 3 {
+		t.Fatalf("updated = %d, want 3", stat.Updated)
+	}
+	if stat.MajorUpdates != 1 {
+		t.Fatalf("major updates = %d, want 1", stat.MajorUpdates)
+	}
+	if stat.MinorUpdates != 1 {
+		t.Fatalf("minor updates = %d, want 1", stat.MinorUpdates)
+	}
+	if stat.PatchUpdates != 1 {
+		t.Fatalf("patch updates = %d, want 1", stat.PatchUpdates)
+	}
+}
+
+func TestOutputDiffStat(t *testing.T) {
+	root := NewRootCmd()
+	var buf bytes.Buffer
+	root.SetOut(&buf)
+
+	outputDiffStat(root, DiffStat{
+		Added:        2,
+		Removed:      1,
+		Updated:      3,
+		MajorUpdates: 1,
+		MinorUpdates: 1,
+		PatchUpdates: 1,
+	})
+
+	got := strings.TrimSpace(buf.String())
+	want := "2 added, 1 removed, 3 updated (1 major, 1 minor, 1 patch)"
+	if got != want {
+		t.Fatalf("diff stat output = %q, want %q", got, want)
 	}
 }
 

@@ -401,11 +401,12 @@ git pkgs diff                             # HEAD vs working tree
 git pkgs diff --from=abc123 --to=def456   # between two commits
 git pkgs diff --from=HEAD~10              # HEAD~10 vs working tree
 git pkgs diff main..feature               # compare branches
+git pkgs diff main..feature --stat        # aggregate counts only
 git pkgs diff --type=development          # only dev dependency changes
 git pkgs diff --ecosystem=npm             # filter by ecosystem
 ```
 
-With no arguments, compares HEAD against the working tree (like `git diff`). Shows added, removed, and modified packages with version info.
+With no arguments, compares HEAD against the working tree (like `git diff`). Shows added, removed, and modified packages with version info. Use `--stat` or `--summary` for one-line aggregate counts.
 
 ### Diff between files
 
