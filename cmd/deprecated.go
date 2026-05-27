@@ -70,7 +70,7 @@ func runDeprecated(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(resolved) == 0 {
-		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No lockfile dependencies found.")
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No resolved dependencies found.")
 		return nil
 	}
 
@@ -87,11 +87,7 @@ func runDeprecated(cmd *cobra.Command, args []string) error {
 		purlToDeps[purlStr] = append(purlToDeps[purlStr], dep)
 	}
 
-	versionData, err := fetchDeprecatedVersionData(versionedPURLs)
-	if err != nil {
-		return fmt.Errorf("looking up deprecated versions: %w", err)
-	}
-
+	versionData := fetchDeprecatedVersionData(versionedPURLs)
 	deprecated := deprecatedPackages(purlToDeps, versionData)
 	if len(deprecated) == 0 {
 		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No deprecated dependencies found.")
@@ -120,16 +116,16 @@ func versionedPURLForDependency(dep database.Dependency) string {
 	return purl.MakePURLString(dep.Ecosystem, dep.Name, dep.Requirement)
 }
 
-func fetchDeprecatedVersionData(versionedPURLs []string) (map[string]*registries.Version, error) {
+func fetchDeprecatedVersionData(versionedPURLs []string) map[string]*registries.Version {
 	if len(versionedPURLs) == 0 {
-		return map[string]*registries.Version{}, nil
+		return map[string]*registries.Version{}
 	}
 
 	const deprecatedLookupTimeout = 60 * time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), deprecatedLookupTimeout)
 	defer cancel()
 
-	return registries.BulkFetchVersions(ctx, versionedPURLs, nil), nil
+	return registries.BulkFetchVersions(ctx, versionedPURLs, nil)
 }
 
 func deprecatedPackages(

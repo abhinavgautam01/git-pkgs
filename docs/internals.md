@@ -159,6 +159,8 @@ By default, a hybrid approach routes requests based on PURL qualifiers: packages
 
 Data is cached in the `packages` and `versions` tables with a 24-hour TTL. The `packages` table stores provenance: `repository_url` (the registry queried) and `source` (ecosystems or registries).
 
+The `deprecated` command uses [`github.com/git-pkgs/registries`](https://github.com/git-pkgs/registries) directly to check exact installed versions for registry deprecation status.
+
 ## Package Management
 
 The `install`, `add`, `remove`, and `update` commands use [git-pkgs/managers](https://github.com/git-pkgs/managers) to translate generic operations into package manager CLI commands. The library builds commands programmatically from YAML definitions rather than constructing shell strings.
