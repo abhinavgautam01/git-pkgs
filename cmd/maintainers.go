@@ -100,6 +100,9 @@ func runMaintainers(cmd *cobra.Command, args []string) error {
 	deps = filterByEcosystem(deps, ecosystem)
 	deps = selectMaintainerDependencies(deps, includeTransitive)
 	if len(deps) == 0 {
+		if format == formatJSON {
+			return outputMaintainersJSON(cmd, emptyMaintainersResult())
+		}
 		if includeTransitive {
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No dependencies found.")
 		} else {
@@ -112,9 +115,12 @@ func runMaintainers(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	data := fetchMaintainerData(ctx, purls)
+	data := fetchMaintainerData(ctx, db, deps, purls)
 	result := buildMaintainersResult(deps, data, singleOnly)
 	if len(result.Dependencies) == 0 {
+		if format == formatJSON {
+			return outputMaintainersJSON(cmd, result)
+		}
 		if singleOnly {
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No single-maintainer dependencies found.")
 		} else {
@@ -174,7 +180,61 @@ func maintainerPURLForDependency(dep database.Dependency) string {
 	return purl.MakePURLString(dep.Ecosystem, dep.Name, "")
 }
 
-func fetchMaintainerData(ctx context.Context, purls []string) map[string]maintainerLookupResult {
+func fetchMaintainerData(
+	ctx context.Context,
+	db *database.DB,
+	deps []database.Dependency,
+	purls []string,
+) map[string]maintainerLookupResult {
+	results := make(map[string]maintainerLookupResult, len(purls))
+	if len(purls) == 0 {
+		return results
+	}
+
+	for purlStr, result := range cachedMaintainerData(db, purls) {
+		results[purlStr] = result
+	}
+
+	misses := make([]string, 0)
+	for _, purlStr := range purls {
+		if _, ok := results[purlStr]; !ok {
+			misses = append(misses, purlStr)
+		}
+	}
+	if len(misses) == 0 {
+		return results
+	}
+
+	fetched := fetchMaintainerDataUncached(ctx, misses)
+	for purlStr, result := range fetched {
+		results[purlStr] = result
+	}
+	saveMaintainerData(db, deps, fetched)
+
+	return results
+}
+
+func cachedMaintainerData(db *database.DB, purls []string) map[string]maintainerLookupResult {
+	results := make(map[string]maintainerLookupResult, len(purls))
+	if db == nil {
+		return results
+	}
+
+	cached, err := db.GetCachedMaintainers(purls, enrichmentCacheTTL)
+	if err != nil {
+		return results
+	}
+	for purlStr, cachedMaintainers := range cached {
+		var maintainers []registries.Maintainer
+		if err := json.Unmarshal([]byte(cachedMaintainers.Data), &maintainers); err != nil {
+			continue
+		}
+		results[purlStr] = maintainerLookupResult{Maintainers: maintainers}
+	}
+	return results
+}
+
+func fetchMaintainerDataUncached(ctx context.Context, purls []string) map[string]maintainerLookupResult {
 	results := make(map[string]maintainerLookupResult, len(purls))
 	if len(purls) == 0 {
 		return results
@@ -215,12 +275,57 @@ func fetchMaintainerData(ctx context.Context, purls []string) map[string]maintai
 	return results
 }
 
+func saveMaintainerData(db *database.DB, deps []database.Dependency, lookup map[string]maintainerLookupResult) {
+	if db == nil || len(lookup) == 0 {
+		return
+	}
+
+	packages := maintainerPackageData(deps)
+	toSave := make([]database.PackageMaintainersData, 0, len(lookup))
+	for purlStr, result := range lookup {
+		if result.Error != "" {
+			continue
+		}
+		pkg, ok := packages[purlStr]
+		if !ok {
+			continue
+		}
+		raw, err := json.Marshal(result.Maintainers)
+		if err != nil {
+			continue
+		}
+		pkg.Maintainers = string(raw)
+		toSave = append(toSave, pkg)
+	}
+
+	_ = db.SavePackageMaintainersBatch(toSave)
+}
+
+func maintainerPackageData(deps []database.Dependency) map[string]database.PackageMaintainersData {
+	packages := make(map[string]database.PackageMaintainersData)
+	for _, dep := range deps {
+		purlStr := maintainerPURLForDependency(dep)
+		if purlStr == "" {
+			continue
+		}
+		if _, ok := packages[purlStr]; ok {
+			continue
+		}
+		packages[purlStr] = database.PackageMaintainersData{
+			PURL:      purlStr,
+			Ecosystem: dep.Ecosystem,
+			Name:      dep.Name,
+		}
+	}
+	return packages
+}
+
 func buildMaintainersResult(
 	deps []database.Dependency,
 	lookup map[string]maintainerLookupResult,
 	singleOnly bool,
 ) *MaintainersResult {
-	result := &MaintainersResult{}
+	result := emptyMaintainersResult()
 	result.Summary.TotalDependencies = len(deps)
 
 	for _, dep := range deps {
@@ -276,6 +381,12 @@ func buildMaintainersResult(
 	})
 
 	return result
+}
+
+func emptyMaintainersResult() *MaintainersResult {
+	return &MaintainersResult{
+		Dependencies: []MaintainersEntry{},
+	}
 }
 
 func normalizeMaintainers(maintainers []registries.Maintainer) []MaintainerInfo {

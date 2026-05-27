@@ -1,10 +1,16 @@
 package cmd
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/git-pkgs/git-pkgs/internal/database"
 	"github.com/git-pkgs/registries"
+	"github.com/spf13/cobra"
 )
 
 func TestMaintainerPURLForDependency(t *testing.T) {
@@ -146,6 +152,56 @@ func TestBuildMaintainersResult(t *testing.T) {
 			t.Fatalf("maintainer count = %d, want 1", result.Dependencies[0].MaintainerCount)
 		}
 	})
+}
+
+func TestFetchMaintainerDataUsesCache(t *testing.T) {
+	db, err := database.Create(filepath.Join(t.TempDir(), "pkgs.sqlite3"))
+	if err != nil {
+		t.Fatalf("create db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	maintainers := []registries.Maintainer{{Login: "alice"}}
+	raw, err := json.Marshal(maintainers)
+	if err != nil {
+		t.Fatalf("marshal maintainers: %v", err)
+	}
+	err = db.SavePackageMaintainersBatch([]database.PackageMaintainersData{
+		{
+			PURL:        "pkg:npm/express",
+			Ecosystem:   "npm",
+			Name:        "express",
+			Maintainers: string(raw),
+		},
+	})
+	if err != nil {
+		t.Fatalf("save maintainers: %v", err)
+	}
+
+	deps := []database.Dependency{
+		{Name: "express", Ecosystem: "npm", ManifestKind: "manifest"},
+	}
+	got := fetchMaintainerData(context.Background(), db, deps, []string{"pkg:npm/express"})
+	result := got["pkg:npm/express"]
+	if result.Error != "" {
+		t.Fatalf("lookup error = %q, want none", result.Error)
+	}
+	if len(result.Maintainers) != 1 || result.Maintainers[0].Login != "alice" {
+		t.Fatalf("maintainers = %#v, want alice", result.Maintainers)
+	}
+}
+
+func TestOutputMaintainersJSONEmptyResult(t *testing.T) {
+	var out bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&out)
+
+	if err := outputMaintainersJSON(cmd, emptyMaintainersResult()); err != nil {
+		t.Fatalf("output json: %v", err)
+	}
+	if !strings.Contains(out.String(), `"dependencies": []`) {
+		t.Fatalf("json output = %q, want empty dependencies array", out.String())
+	}
 }
 
 func TestFormatMaintainerNames(t *testing.T) {
