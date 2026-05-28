@@ -28,6 +28,8 @@ Supports range syntax (main..feature) or explicit --from/--to flags.`,
 	diffCmd.Flags().StringP("ecosystem", "e", "", "Filter by ecosystem")
 	diffCmd.Flags().StringP("type", "t", "", "Filter by dependency type (runtime, development, etc.)")
 	diffCmd.Flags().StringP("format", "f", "text", "Output format: text, json")
+	diffCmd.Flags().Bool("stat", false, "Show aggregate dependency change counts")
+	diffCmd.Flags().Bool("summary", false, "Show aggregate dependency change counts")
 	parent.AddCommand(diffCmd)
 }
 
@@ -46,12 +48,24 @@ type DiffEntry struct {
 	ToRequirement   string `json:"to_requirement,omitempty"`
 }
 
+type DiffStat struct {
+	Added        int `json:"added"`
+	Removed      int `json:"removed"`
+	Updated      int `json:"updated"`
+	MajorUpdates int `json:"major_updates"`
+	MinorUpdates int `json:"minor_updates"`
+	PatchUpdates int `json:"patch_updates"`
+	OtherUpdates int `json:"other_updates"`
+}
+
 func runDiff(cmd *cobra.Command, args []string) error {
 	fromRef, _ := cmd.Flags().GetString("from")
 	toRef, _ := cmd.Flags().GetString("to")
 	ecosystem, _ := cmd.Flags().GetString("ecosystem")
 	depType, _ := cmd.Flags().GetString("type")
 	format, _ := cmd.Flags().GetString("format")
+	stat, _ := cmd.Flags().GetBool("stat")
+	summary, _ := cmd.Flags().GetBool("summary")
 	includeSubmodules, _ := cmd.Flags().GetBool("include-submodules")
 
 	// Parse range syntax if provided
@@ -92,6 +106,11 @@ func runDiff(cmd *cobra.Command, args []string) error {
 	// Apply filters
 	if ecosystem != "" || depType != "" {
 		result = filterDiffResult(result, ecosystem, depType)
+	}
+
+	if stat || summary {
+		outputDiffStat(cmd, buildDiffStat(result))
+		return nil
 	}
 
 	if len(result.Added) == 0 && len(result.Modified) == 0 && len(result.Removed) == 0 {
@@ -357,6 +376,63 @@ func outputDiffJSON(cmd *cobra.Command, result *DiffResult) error {
 	enc := json.NewEncoder(cmd.OutOrStdout())
 	enc.SetIndent("", "  ")
 	return enc.Encode(result)
+}
+
+func buildDiffStat(result *DiffResult) DiffStat {
+	stat := DiffStat{
+		Added:   len(result.Added),
+		Removed: len(result.Removed),
+		Updated: len(result.Modified),
+	}
+
+	for _, entry := range result.Modified {
+		switch classifyUpdate(entry.FromRequirement, entry.ToRequirement) {
+		case updateMajor:
+			stat.MajorUpdates++
+		case updateMinor:
+			stat.MinorUpdates++
+		case updatePatch:
+			stat.PatchUpdates++
+		default:
+			stat.OtherUpdates++
+		}
+	}
+
+	return stat
+}
+
+func outputDiffStat(cmd *cobra.Command, stat DiffStat) {
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s, %s, %s",
+		formatCount(stat.Added, "added"),
+		formatCount(stat.Removed, "removed"),
+		formatCount(stat.Updated, "updated"))
+
+	parts := diffUpdateStatParts(stat)
+	if len(parts) > 0 {
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), " (%s)", strings.Join(parts, ", "))
+	}
+	_, _ = fmt.Fprintln(cmd.OutOrStdout())
+}
+
+func diffUpdateStatParts(stat DiffStat) []string {
+	parts := make([]string, 0, 4) //nolint:mnd
+	if stat.MajorUpdates > 0 {
+		parts = append(parts, formatCount(stat.MajorUpdates, updateMajor))
+	}
+	if stat.MinorUpdates > 0 {
+		parts = append(parts, formatCount(stat.MinorUpdates, updateMinor))
+	}
+	if stat.PatchUpdates > 0 {
+		parts = append(parts, formatCount(stat.PatchUpdates, updatePatch))
+	}
+	if stat.OtherUpdates > 0 {
+		parts = append(parts, formatCount(stat.OtherUpdates, "other"))
+	}
+	return parts
+}
+
+func formatCount(count int, label string) string {
+	return fmt.Sprintf("%d %s", count, label)
 }
 
 func outputDiffText(cmd *cobra.Command, result *DiffResult) error {
