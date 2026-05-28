@@ -133,7 +133,7 @@ func fetchDeprecatedVersionData(db *database.DB, versionedPURLs []string) map[st
 		return versionData
 	}
 
-	const deprecatedLookupTimeout = 60 * time.Second
+	const deprecatedLookupTimeout = 5 * time.Minute
 	ctx, cancel := context.WithTimeout(context.Background(), deprecatedLookupTimeout)
 	defer cancel()
 
@@ -205,14 +205,6 @@ func packagePURLFromVersioned(purlStr string) string {
 		return ""
 	}
 	return parsed.WithoutVersion().String()
-}
-
-func versionFromPURL(purlStr string) string {
-	parsed, err := purl.Parse(purlStr)
-	if err != nil {
-		return ""
-	}
-	return parsed.Version
 }
 
 func saveDeprecatedVersionData(db *database.DB, versionData map[string]*registries.Version) {

@@ -2,7 +2,7 @@
 
 git-pkgs walks a repository's commit history, parses manifest files at each commit, and stores dependency changes in a SQLite database. This lets you query what changed, when, and who did it.
 
-The tool works with two types of data. Intrinsic data comes from your git history: dependency names, versions from manifests, who added them, when, and why. Commands like `list`, `history`, `blame`, `diff`, and `stale` use only intrinsic data and require no network access. Extrinsic data comes from external sources: vulnerability info from [OSV](https://osv.dev), and registry metadata (latest versions, licenses, deprecation status) from [ecosyste.ms](https://packages.ecosyste.ms/) and package registries. Commands like `vulns`, `outdated`, `licenses`, and `deprecated` fetch and cache this external data.
+The tool works with two types of data. Intrinsic data comes from your git history: dependency names, versions from manifests, who added them, when, and why. Commands like `list`, `history`, `blame`, `diff`, and `stale` use only intrinsic data and require no network access. Extrinsic data comes from external sources: vulnerability info from [OSV](https://osv.dev), and registry metadata (latest versions, licenses, deprecation status) from [ecosyste.ms](https://packages.ecosyste.ms/) and package registries. Commands like `vulns`, `outdated`, `freshness`, `licenses`, and `deprecated` fetch and cache this external data.
 
 ## Package Structure
 
