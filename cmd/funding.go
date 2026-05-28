@@ -192,7 +192,7 @@ func fetchFundingMetadata(purls []string) (map[string]*enrichment.PackageInfo, e
 		return nil, err
 	}
 
-	const fundingLookupTimeout = 60 * time.Second
+	const fundingLookupTimeout = 5 * time.Minute
 	ctx, cancel := context.WithTimeout(context.Background(), fundingLookupTimeout)
 	defer cancel()
 
@@ -220,7 +220,7 @@ func fetchFundingLinks(purls []string) (map[string][]string, error) {
 		return nil, err
 	}
 
-	const fundingLookupTimeout = 60 * time.Second
+	const fundingLookupTimeout = 5 * time.Minute
 	ctx, cancel := context.WithTimeout(context.Background(), fundingLookupTimeout)
 	defer cancel()
 
