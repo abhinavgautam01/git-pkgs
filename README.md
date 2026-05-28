@@ -45,6 +45,7 @@ git pkgs diff main..feature   # compare branches
 git pkgs vulns          # scan for known CVEs
 git pkgs vulns blame    # who introduced each vulnerability
 git pkgs outdated       # find packages with newer versions
+git pkgs freshness      # release-age freshness metrics
 git pkgs changelog lodash -e npm --from 4.17.20 --to 4.17.21  # view changelog
 git pkgs update         # update all dependencies
 git pkgs add lodash     # add a package
@@ -244,6 +245,16 @@ git pkgs stale --ecosystem=npm  # filter by ecosystem
 ```
 
 Shows dependencies sorted by how long since they were last changed in your repo. Useful for finding packages that may have been forgotten or need review.
+
+### Check freshness metrics
+
+```bash
+git pkgs freshness                  # average days behind latest releases
+git pkgs freshness --limit=20       # show more lagging dependencies
+git pkgs freshness --ecosystem=npm  # filter by ecosystem
+```
+
+Compares installed versions with registry release dates to report average days behind latest and the dependencies with the largest release-date lag.
 
 ### Find outdated dependencies
 
