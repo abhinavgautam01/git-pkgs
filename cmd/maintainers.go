@@ -17,7 +17,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const maintainerLookupConcurrency = 8
+const (
+	maintainerLookupConcurrency = 8
+	maintainerLookupTimeout     = 5 * time.Minute
+)
 
 func addMaintainersCmd(parent *cobra.Command) {
 	maintainersCmd := &cobra.Command{
@@ -112,7 +115,7 @@ func runMaintainers(cmd *cobra.Command, args []string) error {
 	}
 
 	purls := uniqueMaintainerPURLs(deps)
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), maintainerLookupTimeout)
 	defer cancel()
 
 	data := fetchMaintainerData(ctx, db, deps, purls)
