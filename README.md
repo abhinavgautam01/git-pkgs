@@ -306,7 +306,7 @@ git pkgs maintainers --all        # include transitive lockfile deps
 git pkgs maintainers --format=json
 ```
 
-Checks package metadata for maintainer data and shows maintainer count plus names or logins. Single-maintainer packages are useful review targets, though they are not inherently unsafe.
+Checks ecosyste.ms package metadata for maintainer data and shows maintainer count plus names or logins. Single-maintainer packages are useful review targets, though they are not inherently unsafe.
 
 ### View changelogs
 
@@ -748,7 +748,7 @@ GIT_PKGS_DIRECT=1 git pkgs outdated  # one-off via environment
 
 By default, git-pkgs uses a hybrid approach: packages with a `repository_url` qualifier in their PURL (indicating a private registry) are queried directly, while public packages go through ecosyste.ms for efficiency.
 
-**Private registries and proxies:** For commands that query registries (`outdated`, `licenses`, `maintainers`, SBOM enrichment), git-pkgs extracts registry URLs from lockfiles when available:
+**Private registries and proxies:** For commands that query registries (`outdated`, `licenses`, SBOM enrichment), git-pkgs extracts registry URLs from lockfiles when available:
 
 - npm: `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `bun.lock` (from `resolved` URLs)
 - pypi: `Pipfile.lock`, `poetry.lock`, `uv.lock` (from source configuration)

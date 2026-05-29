@@ -6,27 +6,22 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/git-pkgs/enrichment"
 	"github.com/git-pkgs/git-pkgs/internal/database"
 	"github.com/git-pkgs/git-pkgs/internal/git"
 	"github.com/git-pkgs/purl"
-	"github.com/git-pkgs/registries"
-	_ "github.com/git-pkgs/registries/all"
 	"github.com/spf13/cobra"
 )
 
-const (
-	maintainerLookupConcurrency = 8
-	maintainerLookupTimeout     = 5 * time.Minute
-)
+const maintainerLookupTimeout = 5 * time.Minute
 
 func addMaintainersCmd(parent *cobra.Command) {
 	maintainersCmd := &cobra.Command{
 		Use:   "maintainers",
 		Short: "Show dependency maintainer information",
-		Long:  `Fetch package registry maintainer data and show maintainer counts for dependencies.`,
+		Long:  `Fetch package maintainer metadata and show maintainer counts for dependencies.`,
 		RunE:  runMaintainers,
 	}
 
@@ -49,7 +44,6 @@ type MaintainersSummary struct {
 }
 
 type MaintainerInfo struct {
-	UUID  string `json:"uuid,omitempty"`
 	Login string `json:"login,omitempty"`
 	Name  string `json:"name,omitempty"`
 	Email string `json:"email,omitempty"`
@@ -75,7 +69,7 @@ type MaintainersResult struct {
 }
 
 type maintainerLookupResult struct {
-	Maintainers []registries.Maintainer
+	Maintainers []MaintainerInfo
 	Error       string
 }
 
@@ -228,7 +222,7 @@ func cachedMaintainerData(db *database.DB, purls []string) map[string]maintainer
 		return results
 	}
 	for purlStr, cachedMaintainers := range cached {
-		var maintainers []registries.Maintainer
+		var maintainers []MaintainerInfo
 		if err := json.Unmarshal([]byte(cachedMaintainers.Data), &maintainers); err != nil {
 			continue
 		}
@@ -243,38 +237,32 @@ func fetchMaintainerDataUncached(ctx context.Context, purls []string) map[string
 		return results
 	}
 
-	client := registries.DefaultClient().WithUserAgent("git-pkgs/" + version)
-	jobs := make(chan string)
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-
-	workerCount := maintainerLookupConcurrency
-	if len(purls) < workerCount {
-		workerCount = len(purls)
+	client, err := NewEnrichmentClient(enrichment.WithUserAgent(userAgent))
+	if err != nil {
+		for _, purlStr := range purls {
+			results[purlStr] = maintainerLookupResult{Error: fmt.Sprintf("creating enrichment client: %v", err)}
+		}
+		return results
 	}
 
-	for range workerCount {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for purlStr := range jobs {
-				maintainers, err := registries.FetchMaintainersFromPURL(ctx, purlStr, client)
-				result := maintainerLookupResult{Maintainers: maintainers}
-				if err != nil {
-					result.Error = err.Error()
-				}
-				mu.Lock()
-				results[purlStr] = result
-				mu.Unlock()
-			}
-		}()
+	packages, err := client.BulkLookup(ctx, purls)
+	if err != nil {
+		for _, purlStr := range purls {
+			results[purlStr] = maintainerLookupResult{Error: err.Error()}
+		}
+		return results
 	}
 
 	for _, purlStr := range purls {
-		jobs <- purlStr
+		pkg := packages[purlStr]
+		if pkg == nil {
+			results[purlStr] = maintainerLookupResult{}
+			continue
+		}
+		results[purlStr] = maintainerLookupResult{
+			Maintainers: maintainerInfosFromEnrichment(pkg.Maintainers),
+		}
 	}
-	close(jobs)
-	wg.Wait()
 	return results
 }
 
@@ -392,12 +380,25 @@ func emptyMaintainersResult() *MaintainersResult {
 	}
 }
 
-func normalizeMaintainers(maintainers []registries.Maintainer) []MaintainerInfo {
+func maintainerInfosFromEnrichment(maintainers []enrichment.Maintainer) []MaintainerInfo {
+	infos := make([]MaintainerInfo, 0, len(maintainers))
+	for _, maintainer := range maintainers {
+		infos = append(infos, MaintainerInfo{
+			Login: maintainer.Login,
+			Name:  maintainer.Name,
+			Email: maintainer.Email,
+			URL:   maintainer.URL,
+			Role:  maintainer.Role,
+		})
+	}
+	return infos
+}
+
+func normalizeMaintainers(maintainers []MaintainerInfo) []MaintainerInfo {
 	seen := make(map[string]bool)
 	infos := make([]MaintainerInfo, 0, len(maintainers))
 	for _, maintainer := range maintainers {
 		info := MaintainerInfo{
-			UUID:  maintainer.UUID,
 			Login: maintainer.Login,
 			Name:  maintainer.Name,
 			Email: maintainer.Email,
@@ -423,7 +424,6 @@ func maintainerDisplay(maintainer MaintainerInfo) string {
 		maintainer.Name,
 		maintainer.Email,
 		maintainer.URL,
-		maintainer.UUID,
 	}
 	for _, part := range parts {
 		if strings.TrimSpace(part) != "" {

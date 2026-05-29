@@ -157,9 +157,7 @@ The `outdated`, `freshness`, `deprecated`, `funding`, `maintainers`, `changelog`
 
 By default, a hybrid approach routes requests based on PURL qualifiers: packages with a `repository_url` qualifier (indicating a private registry) go directly to that registry, while public packages go through ecosyste.ms. Set `git config pkgs.direct true` or `GIT_PKGS_DIRECT=1` to skip ecosyste.ms and query all registries directly.
 
-Data is cached in the `packages` and `versions` tables with a 24-hour TTL. The `packages` table stores provenance: `repository_url` (the registry queried) and `source` (ecosystems or registries). The `funding` command stores package funding links in `packages`, and the `deprecated` command uses the `versions` cache and fetches exact-version status from registries when cached deprecation metadata is missing.
-
-The `maintainers` command stores package maintainer lists in `packages` and uses the same 24-hour TTL as other package metadata commands.
+Data is cached in the `packages` and `versions` tables with a 24-hour TTL. The `packages` table stores provenance: `repository_url` (the registry queried) and `source` (ecosystems or registries). The `funding` command stores package funding links in `packages`, the `maintainers` command stores package maintainer lists in `packages`, and the `deprecated` command uses the `versions` cache and fetches exact-version status from registries when cached deprecation metadata is missing.
 
 ## Package Management
 

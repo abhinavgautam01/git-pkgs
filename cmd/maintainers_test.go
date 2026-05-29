@@ -4,14 +4,45 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/git-pkgs/enrichment"
 	"github.com/git-pkgs/git-pkgs/internal/database"
-	"github.com/git-pkgs/registries"
 	"github.com/spf13/cobra"
 )
+
+type mockMaintainersEnrichmentClient struct {
+	packages map[string]*enrichment.PackageInfo
+}
+
+func (m *mockMaintainersEnrichmentClient) BulkLookup(_ context.Context, purls []string) (map[string]*enrichment.PackageInfo, error) {
+	result := make(map[string]*enrichment.PackageInfo)
+	for _, purlStr := range purls {
+		if pkg, ok := m.packages[purlStr]; ok {
+			result[purlStr] = pkg
+		}
+	}
+	return result, nil
+}
+
+func (m *mockMaintainersEnrichmentClient) GetVersions(_ context.Context, _ string) ([]enrichment.VersionInfo, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockMaintainersEnrichmentClient) GetVersion(_ context.Context, _ string) (*enrichment.VersionInfo, error) {
+	return nil, errors.New("not implemented")
+}
+
+func setMaintainersMockEnrichment(packages map[string]*enrichment.PackageInfo) func() {
+	orig := NewEnrichmentClient
+	NewEnrichmentClient = func(opts ...enrichment.Option) (enrichment.Client, error) {
+		return &mockMaintainersEnrichmentClient{packages: packages}, nil
+	}
+	return func() { NewEnrichmentClient = orig }
+}
 
 func TestMaintainerPURLForDependency(t *testing.T) {
 	t.Run("builds package PURL without version", func(t *testing.T) {
@@ -96,7 +127,7 @@ func TestBuildMaintainersResult(t *testing.T) {
 	}
 	lookup := map[string]maintainerLookupResult{
 		"pkg:npm/express": {
-			Maintainers: []registries.Maintainer{
+			Maintainers: []MaintainerInfo{
 				{Login: "alice"},
 				{Login: "alice"},
 			},
@@ -161,7 +192,7 @@ func TestFetchMaintainerDataUsesCache(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
-	maintainers := []registries.Maintainer{{Login: "alice"}}
+	maintainers := []MaintainerInfo{{Login: "alice"}}
 	raw, err := json.Marshal(maintainers)
 	if err != nil {
 		t.Fatalf("marshal maintainers: %v", err)
@@ -188,6 +219,33 @@ func TestFetchMaintainerDataUsesCache(t *testing.T) {
 	}
 	if len(result.Maintainers) != 1 || result.Maintainers[0].Login != "alice" {
 		t.Fatalf("maintainers = %#v, want alice", result.Maintainers)
+	}
+}
+
+func TestFetchMaintainerDataUncachedUsesEnrichmentBulkLookup(t *testing.T) {
+	restore := setMaintainersMockEnrichment(map[string]*enrichment.PackageInfo{
+		"pkg:npm/express": {
+			Maintainers: []enrichment.Maintainer{
+				{Login: "alice", Role: "owner"},
+			},
+		},
+	})
+	defer restore()
+
+	got := fetchMaintainerDataUncached(context.Background(), []string{"pkg:npm/express", "pkg:npm/private"})
+	express := got["pkg:npm/express"]
+	if express.Error != "" {
+		t.Fatalf("express error = %q, want none", express.Error)
+	}
+	if len(express.Maintainers) != 1 || express.Maintainers[0].Login != "alice" || express.Maintainers[0].Role != "owner" {
+		t.Fatalf("express maintainers = %#v, want alice owner", express.Maintainers)
+	}
+	private := got["pkg:npm/private"]
+	if private.Error != "" {
+		t.Fatalf("private error = %q, want none", private.Error)
+	}
+	if len(private.Maintainers) != 0 {
+		t.Fatalf("private maintainers = %#v, want empty", private.Maintainers)
 	}
 }
 
