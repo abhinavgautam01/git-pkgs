@@ -7,7 +7,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/ecosyste-ms/ecosystems-go"
 	"github.com/git-pkgs/enrichment"
 	"github.com/git-pkgs/git-pkgs/internal/database"
 	"github.com/git-pkgs/git-pkgs/internal/git"
@@ -162,26 +161,17 @@ func fetchFundingPackageData(db *database.DB, deps []database.Dependency) (map[s
 		return nil, err
 	}
 
-	fundingLookupPURLs := make([]string, 0, len(packages))
+	fetchedFunding := make(map[string]*fundingPackageData, len(packages))
 	for purlStr, pkg := range packages {
 		if pkg == nil {
 			continue
 		}
-		result[purlStr] = &fundingPackageData{FundingLinks: []string{}}
-		if fundingLinksFromEcosystems(purlStr, pkg) {
-			fundingLookupPURLs = append(fundingLookupPURLs, purlStr)
-		}
+		data := &fundingPackageData{FundingLinks: uniqueStrings(pkg.FundingLinks)}
+		result[purlStr] = data
+		fetchedFunding[purlStr] = data
 	}
 
-	fundingLinks, err := fetchFundingLinks(fundingLookupPURLs)
-	if err != nil {
-		return nil, err
-	}
-	for purlStr, links := range fundingLinks {
-		result[purlStr] = &fundingPackageData{FundingLinks: links}
-	}
-
-	saveFundingPackageData(db, purlToDep, packages, result)
+	saveFundingPackageData(db, purlToDep, fetchedFunding)
 
 	return result, nil
 }
@@ -199,73 +189,18 @@ func fetchFundingMetadata(purls []string) (map[string]*enrichment.PackageInfo, e
 	return client.BulkLookup(ctx, purls)
 }
 
-func fundingLinksFromEcosystems(purlStr string, pkg *enrichment.PackageInfo) bool {
-	if pkg.Source != "ecosystems" {
-		return false
-	}
-	parsed, err := purl.Parse(purlStr)
-	if err != nil {
-		return false
-	}
-	return !parsed.IsPrivateRegistry()
-}
-
-func fetchFundingLinks(purls []string) (map[string][]string, error) {
-	if len(purls) == 0 {
-		return map[string][]string{}, nil
-	}
-
-	client, err := ecosystems.NewClient("git-pkgs/" + version)
-	if err != nil {
-		return nil, err
-	}
-
-	const fundingLookupTimeout = 5 * time.Minute
-	ctx, cancel := context.WithTimeout(context.Background(), fundingLookupTimeout)
-	defer cancel()
-
-	packages, err := client.BulkLookup(ctx, purls)
-	if err != nil {
-		return nil, err
-	}
-
-	result := make(map[string][]string, len(packages))
-	for purlStr, pkg := range packages {
-		if pkg == nil {
-			continue
-		}
-		result[purlStr] = uniqueStrings(pkg.FundingLinks)
-	}
-	return result, nil
-}
-
 func saveFundingPackageData(
 	db *database.DB,
 	purlToDep map[string]database.Dependency,
-	packages map[string]*enrichment.PackageInfo,
 	fundingData map[string]*fundingPackageData,
 ) {
 	if db == nil {
 		return
 	}
 
-	var enrichmentToSave []database.PackageEnrichmentData
 	var fundingToSave []database.PackageFundingData
-	for purlStr, pkg := range packages {
-		if pkg == nil {
-			continue
-		}
+	for purlStr, data := range fundingData {
 		dep := purlToDep[purlStr]
-		enrichmentToSave = append(enrichmentToSave, database.PackageEnrichmentData{
-			PURL:          purlStr,
-			Ecosystem:     dep.Ecosystem,
-			Name:          dep.Name,
-			LatestVersion: pkg.LatestVersion,
-			License:       pkg.License,
-			RegistryURL:   pkg.RegistryURL,
-			Source:        pkg.Source,
-		})
-		data := fundingData[purlStr]
 		if data == nil {
 			continue
 		}
@@ -277,7 +212,6 @@ func saveFundingPackageData(
 		})
 	}
 
-	_ = db.SavePackageEnrichmentBatch(enrichmentToSave)
 	_ = db.SavePackageFundingBatch(fundingToSave)
 }
 
