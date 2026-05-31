@@ -1701,10 +1701,13 @@ type CachedPackage struct {
 
 // CachedVersion represents cached version data for a package.
 type CachedVersion struct {
-	PURL        string    `json:"purl"`
-	PackagePURL string    `json:"package_purl"`
-	License     string    `json:"license"`
-	PublishedAt time.Time `json:"published_at"`
+	PURL            string         `json:"purl"`
+	PackagePURL     string         `json:"package_purl"`
+	License         string         `json:"license"`
+	PublishedAt     time.Time      `json:"published_at"`
+	Status          string         `json:"status,omitempty"`
+	StatusCheckedAt time.Time      `json:"status_checked_at,omitempty"`
+	Metadata        map[string]any `json:"metadata,omitempty"`
 }
 
 // GetCachedPackages returns cached package data for the given PURLs that aren't stale.
@@ -1842,7 +1845,7 @@ func (db *DB) GetCachedVersions(packagePurl string, staleDuration time.Duration)
 	staleThreshold := time.Now().Add(-staleDuration)
 
 	rows, err := db.Query(`
-		SELECT purl, package_purl, license, published_at
+		SELECT purl, package_purl, license, published_at, status, status_checked_at, metadata
 		FROM versions
 		WHERE package_purl = ? AND enriched_at >= ?
 		ORDER BY published_at DESC`,
@@ -1855,13 +1858,22 @@ func (db *DB) GetCachedVersions(packagePurl string, staleDuration time.Duration)
 	var result []CachedVersion
 	for rows.Next() {
 		var cv CachedVersion
-		var license sql.NullString
+		var license, status, statusCheckedAt, metadata sql.NullString
 		var publishedAt string
-		if err := rows.Scan(&cv.PURL, &cv.PackagePURL, &license, &publishedAt); err != nil {
+		if err := rows.Scan(&cv.PURL, &cv.PackagePURL, &license, &publishedAt, &status, &statusCheckedAt, &metadata); err != nil {
 			return nil, err
 		}
 		if license.Valid {
 			cv.License = license.String
+		}
+		if status.Valid {
+			cv.Status = status.String
+		}
+		if statusCheckedAt.Valid {
+			cv.StatusCheckedAt, _ = time.Parse(time.RFC3339, statusCheckedAt.String)
+		}
+		if metadata.Valid && metadata.String != "" {
+			_ = json.Unmarshal([]byte(metadata.String), &cv.Metadata)
 		}
 		cv.PublishedAt, _ = time.Parse(time.RFC3339, publishedAt)
 		result = append(result, cv)
@@ -1883,11 +1895,14 @@ func (db *DB) SaveVersions(versions []CachedVersion) error {
 	defer func() { _ = tx.Rollback() }()
 
 	stmt, err := tx.Prepare(`
-		INSERT INTO versions (purl, package_purl, license, published_at, enriched_at, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO versions (purl, package_purl, license, published_at, status, status_checked_at, metadata, enriched_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(purl) DO UPDATE SET
 			license = excluded.license,
 			published_at = excluded.published_at,
+			status = CASE WHEN excluded.status_checked_at != '' THEN excluded.status ELSE versions.status END,
+			status_checked_at = CASE WHEN excluded.status_checked_at != '' THEN excluded.status_checked_at ELSE versions.status_checked_at END,
+			metadata = CASE WHEN excluded.status_checked_at != '' THEN excluded.metadata ELSE versions.metadata END,
 			enriched_at = excluded.enriched_at,
 			updated_at = excluded.updated_at`)
 	if err != nil {
@@ -1900,7 +1915,19 @@ func (db *DB) SaveVersions(versions []CachedVersion) error {
 		if !v.PublishedAt.IsZero() {
 			publishedAt = v.PublishedAt.Format(time.RFC3339)
 		}
-		if _, err := stmt.Exec(v.PURL, v.PackagePURL, v.License, publishedAt, now, now, now); err != nil {
+		statusCheckedAt := ""
+		if !v.StatusCheckedAt.IsZero() {
+			statusCheckedAt = v.StatusCheckedAt.Format(time.RFC3339)
+		}
+		metadata := ""
+		if len(v.Metadata) > 0 {
+			raw, err := json.Marshal(v.Metadata)
+			if err != nil {
+				return err
+			}
+			metadata = string(raw)
+		}
+		if _, err := stmt.Exec(v.PURL, v.PackagePURL, v.License, publishedAt, v.Status, statusCheckedAt, metadata, now, now, now); err != nil {
 			return err
 		}
 	}

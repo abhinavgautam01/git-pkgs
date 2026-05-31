@@ -16,6 +16,7 @@ func TestPagerFlagAccepted(t *testing.T) {
 		"stats",
 		"stale",
 		"freshness",
+		"deprecated",
 		"log",
 		"list",
 		"history",

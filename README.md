@@ -12,7 +12,7 @@ For best results, commit your lockfiles. Manifests show version ranges but lockf
 
 It works across many ecosystems (Gemfile, package.json, Dockerfile, GitHub Actions workflows) giving you one unified history instead of separate tools per ecosystem. The database lives in your `.git` directory where you can use it in CI to catch dependency changes in pull requests.
 
-The core commands (`list`, `history`, `blame`, `diff`, `stale`, etc.) work entirely from your git history with no network access. Additional commands fetch external data: `vulns` checks [OSV](https://osv.dev) for known CVEs, `outdated` and `licenses` query [ecosyste.ms](https://packages.ecosyste.ms/) for registry metadata, and `changelog` fetches upstream changelogs so you can see what changed between versions.
+The core commands (`list`, `history`, `blame`, `diff`, `stale`, etc.) work entirely from your git history with no network access. Additional commands fetch external data: `vulns` checks [OSV](https://osv.dev) for known CVEs, `outdated` and `licenses` query [ecosyste.ms](https://packages.ecosyste.ms/) for registry metadata, `deprecated` checks registries for deprecation metadata, and `changelog` fetches upstream changelogs so you can see what changed between versions.
 
 ## Installation
 
@@ -46,6 +46,7 @@ git pkgs vulns          # scan for known CVEs
 git pkgs vulns blame    # who introduced each vulnerability
 git pkgs outdated       # find packages with newer versions
 git pkgs freshness      # release-age freshness metrics
+git pkgs deprecated     # find deprecated installed versions
 git pkgs changelog lodash -e npm --from 4.17.20 --to 4.17.21  # view changelog
 git pkgs update         # update all dependencies
 git pkgs add lodash     # add a package
@@ -269,6 +270,16 @@ git pkgs outdated --at 2024-03-01  # what was outdated on this date?
 Checks package registries (via [ecosyste.ms](https://packages.ecosyste.ms/)) to find dependencies with newer versions available. Major updates are shown in red, minor in yellow, patch in cyan.
 
 The `--at` flag enables time travel: pass a date (YYYY-MM-DD) or any git ref (tag, branch, commit SHA) to see what was outdated at that point in time. When given a git ref, it uses the commit's date.
+
+### Find deprecated dependencies
+
+```bash
+git pkgs deprecated               # show deprecated installed versions
+git pkgs deprecated --ecosystem=npm
+git pkgs deprecated --format=json
+```
+
+Checks the exact installed dependency versions against registries and reports versions marked as deprecated, including registry-provided messages when available.
 
 ### View changelogs
 
