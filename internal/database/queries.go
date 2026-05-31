@@ -400,16 +400,6 @@ type LogOptions struct {
 	ExcludeBots bool
 }
 
-func IsBotAuthor(name, email string) bool {
-	author := strings.ToLower(name + " " + email)
-	for _, needle := range knownBotAuthorNeedles {
-		if strings.Contains(author, needle) {
-			return true
-		}
-	}
-	return false
-}
-
 func appendExcludeBotsFilter(query string, args []any) (string, []any) {
 	query += " AND NOT ("
 	for i, needle := range knownBotAuthorNeedles {
