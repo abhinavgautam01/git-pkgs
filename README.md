@@ -696,6 +696,21 @@ Plugins appear in a separate "Plugin commands" section in `git pkgs --help`. All
 
 If a plugin name collides with a built-in command, the built-in takes precedence. When the same name exists in multiple `$PATH` directories, the first match wins.
 
+### First-party scorecard plugin
+
+This repository includes an OpenSSF Scorecard plugin candidate:
+
+```bash
+go build -o ~/bin/git-pkgs-scorecard ./plugins/scorecard
+git pkgs scorecard
+git pkgs scorecard --below=5
+git pkgs scorecard --checks=Maintained,Dangerous-Workflow --below=3
+git pkgs list --format json | git-pkgs-scorecard --input -
+git pkgs scorecard --format=json
+```
+
+The plugin consumes `git pkgs list --format json`, resolves package repository URLs through enrichment metadata, queries the OpenSSF Scorecard API, and reports overall scores plus selected checks.
+
 ## Configuration
 
 git-pkgs respects [standard git configuration](https://git-scm.com/docs/git-config).
