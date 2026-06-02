@@ -696,6 +696,21 @@ Plugins appear in a separate "Plugin commands" section in `git pkgs --help`. All
 
 If a plugin name collides with a built-in command, the built-in takes precedence. When the same name exists in multiple `$PATH` directories, the first match wins.
 
+### First-party risk plugin
+
+This repository includes a supply-chain risk audit plugin candidate:
+
+```bash
+go build -o ~/bin/git-pkgs-risk ./plugins/risk
+git pkgs risk
+git pkgs risk --check=typosquat,install-scripts
+git pkgs list --format json | git-pkgs-risk --input -
+git pkgs risk --format=json
+```
+
+The plugin consumes `git pkgs list --format json` and checks for suspicious package names, private-registry dependencies that collide with public packages, and packages with install-script signals.
+The typosquat check compares dependency names against popular packages fetched from ecosyste.ms with a 24-hour local cache. The dependency-confusion check only reports private-registry dependencies when the same package name is confirmed on the corresponding public registry. Install-script checks use npm lockfile metadata, npm registry manifests, and local Python/Ruby build files (`setup.py`/`extconf.rb`) where available.
+
 ## Configuration
 
 git-pkgs respects [standard git configuration](https://git-scm.com/docs/git-config).
