@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/git-pkgs/enrichment"
@@ -14,10 +15,18 @@ import (
 
 // mockEnrichmentClient returns canned license data instead of calling external APIs.
 type mockEnrichmentClient struct {
-	packages map[string]*enrichment.PackageInfo
+	mu               sync.Mutex
+	packages         map[string]*enrichment.PackageInfo
+	versions         map[string][]enrichment.VersionInfo
+	versionInfos     map[string]*enrichment.VersionInfo
+	getVersionsCalls int
+	getVersionCalls  int
 }
 
 func (m *mockEnrichmentClient) BulkLookup(_ context.Context, purls []string) (map[string]*enrichment.PackageInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	result := make(map[string]*enrichment.PackageInfo)
 	for _, p := range purls {
 		if pkg, ok := m.packages[p]; ok {
@@ -27,22 +36,50 @@ func (m *mockEnrichmentClient) BulkLookup(_ context.Context, purls []string) (ma
 	return result, nil
 }
 
-func (m *mockEnrichmentClient) GetVersions(_ context.Context, _ string) ([]enrichment.VersionInfo, error) {
-	return nil, nil
+func (m *mockEnrichmentClient) GetVersions(_ context.Context, purl string) ([]enrichment.VersionInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.getVersionsCalls++
+	return m.versions[purl], nil
 }
 
-func (m *mockEnrichmentClient) GetVersion(_ context.Context, _ string) (*enrichment.VersionInfo, error) {
+func (m *mockEnrichmentClient) GetVersion(_ context.Context, purl string) (*enrichment.VersionInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.getVersionCalls++
+	if info, ok := m.versionInfos[purl]; ok {
+		return info, nil
+	}
 	return nil, nil
 }
 
 // setMockEnrichment replaces the enrichment client constructor with one that
 // returns a mock, and returns a cleanup function to restore the original.
 func setMockEnrichment(packages map[string]*enrichment.PackageInfo) func() {
+	return setMockEnrichmentWithVersions(packages, nil)
+}
+
+func setMockEnrichmentWithVersions(packages map[string]*enrichment.PackageInfo, versions map[string][]enrichment.VersionInfo) func() {
+	mock, restore := setMockEnrichmentClient(&mockEnrichmentClient{packages: packages, versions: versions})
+	_ = mock
+	return restore
+}
+
+func setMockEnrichmentWithVersionInfos(
+	packages map[string]*enrichment.PackageInfo,
+	versions map[string]*enrichment.VersionInfo,
+) (*mockEnrichmentClient, func()) {
+	return setMockEnrichmentClient(&mockEnrichmentClient{packages: packages, versionInfos: versions})
+}
+
+func setMockEnrichmentClient(mock *mockEnrichmentClient) (*mockEnrichmentClient, func()) {
 	orig := cmd.NewEnrichmentClient
 	cmd.NewEnrichmentClient = func(opts ...enrichment.Option) (enrichment.Client, error) {
-		return &mockEnrichmentClient{packages: packages}, nil
+		return mock, nil
 	}
-	return func() { cmd.NewEnrichmentClient = orig }
+	return mock, func() { cmd.NewEnrichmentClient = orig }
 }
 
 // Gemfile with a known copyleft dependency (sidekiq uses LGPL)
@@ -246,6 +283,136 @@ func TestLicensesCommand(t *testing.T) {
 		}
 		if err == nil {
 			t.Error("expected command to return error when non-allowed license found")
+		}
+	})
+
+	t.Run("drift flag reports installed version license changes", func(t *testing.T) {
+		mock, restore := setMockEnrichmentWithVersionInfos(
+			map[string]*enrichment.PackageInfo{
+				"pkg:npm/express": {Ecosystem: "npm", Name: "express", LatestVersion: "5.0.0", License: "GPL-3.0-only"},
+				"pkg:npm/lodash":  {Ecosystem: "npm", Name: "lodash", LatestVersion: "4.17.21", License: "MIT"},
+				"pkg:npm/jest":    {Ecosystem: "npm", Name: "jest", LatestVersion: "29.7.0", License: "MIT"},
+			},
+			map[string]*enrichment.VersionInfo{
+				"pkg:npm/express@4.18.2": {Number: "4.18.2", License: "MIT"},
+				"pkg:npm/lodash@4.17.21": {Number: "4.17.21", License: "MIT"},
+				"pkg:npm/jest@29.7.0":    {Number: "29.7.0", License: "MIT"},
+			},
+		)
+		defer restore()
+
+		repoDir := createTestRepo(t)
+		addFileAndCommit(t, repoDir, "package-lock.json", packageLockJSON, "Add lockfile")
+
+		cleanup := chdir(t, repoDir)
+		defer cleanup()
+
+		rootCmd := cmd.NewRootCmd()
+		rootCmd.SetArgs([]string{"init"})
+		if err := rootCmd.Execute(); err != nil {
+			t.Fatalf("init failed: %v", err)
+		}
+
+		var stdout, stderr bytes.Buffer
+		rootCmd = cmd.NewRootCmd()
+		rootCmd.SetArgs([]string{"licenses", "--drift", "--format", "json"})
+		rootCmd.SetOut(&stdout)
+		rootCmd.SetErr(&stderr)
+		if err := rootCmd.Execute(); err != nil {
+			t.Fatalf("licenses --drift failed: %v\nstderr: %s", err, stderr.String())
+		}
+
+		var result cmd.LicenseDriftResult
+		if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+			t.Fatalf("failed to parse drift JSON: %v\nOutput: %s", err, stdout.String())
+		}
+		if result.Summary.DriftedDependencies != 1 {
+			t.Fatalf("expected one drifted dependency, got %+v", result.Summary)
+		}
+		if len(result.Dependencies) != 1 {
+			t.Fatalf("expected one drift entry, got %d", len(result.Dependencies))
+		}
+
+		entry := result.Dependencies[0]
+		if entry.Name != "express" {
+			t.Fatalf("expected express drift entry, got %q", entry.Name)
+		}
+		if entry.CurrentLicense != "MIT" || entry.LatestLicense != "GPL-3.0-only" {
+			t.Fatalf("unexpected license drift values: %+v", entry)
+		}
+
+		mock.mu.Lock()
+		getVersionCalls := mock.getVersionCalls
+		getVersionsCalls := mock.getVersionsCalls
+		mock.mu.Unlock()
+		if getVersionCalls == 0 {
+			t.Fatal("expected drift lookup to call GetVersion")
+		}
+		if getVersionsCalls != 0 {
+			t.Fatalf("GetVersions calls = %d, want 0", getVersionsCalls)
+		}
+	})
+
+	t.Run("drift text output omits repeated package names", func(t *testing.T) {
+		_, restore := setMockEnrichmentWithVersionInfos(
+			map[string]*enrichment.PackageInfo{
+				"pkg:npm/express": {Ecosystem: "npm", Name: "express", LatestVersion: "5.0.0", License: "GPL-3.0-only"},
+				"pkg:npm/lodash":  {Ecosystem: "npm", Name: "lodash", LatestVersion: "4.17.21", License: "MIT"},
+				"pkg:npm/jest":    {Ecosystem: "npm", Name: "jest", LatestVersion: "29.7.0", License: "MIT"},
+			},
+			map[string]*enrichment.VersionInfo{
+				"pkg:npm/express@4.18.2": {Number: "4.18.2", License: "MIT"},
+				"pkg:npm/lodash@4.17.21": {Number: "4.17.21", License: "MIT"},
+				"pkg:npm/jest@29.7.0":    {Number: "29.7.0", License: "MIT"},
+			},
+		)
+		defer restore()
+
+		repoDir := createTestRepo(t)
+		addFileAndCommit(t, repoDir, "package-lock.json", packageLockJSON, "Add lockfile")
+
+		cleanup := chdir(t, repoDir)
+		defer cleanup()
+
+		rootCmd := cmd.NewRootCmd()
+		rootCmd.SetArgs([]string{"init"})
+		if err := rootCmd.Execute(); err != nil {
+			t.Fatalf("init failed: %v", err)
+		}
+
+		var stdout, stderr bytes.Buffer
+		rootCmd = cmd.NewRootCmd()
+		rootCmd.SetArgs([]string{"licenses", "--drift"})
+		rootCmd.SetOut(&stdout)
+		rootCmd.SetErr(&stderr)
+		if err := rootCmd.Execute(); err != nil {
+			t.Fatalf("licenses --drift failed: %v\nstderr: %s", err, stderr.String())
+		}
+
+		output := stdout.String()
+		if !strings.Contains(output, "express (npm): 4.18.2 MIT -> 5.0.0 GPL-3.0-only") {
+			t.Fatalf("drift text output missing compact entry: %q", output)
+		}
+		if strings.Contains(output, "express@4.18.2") || strings.Contains(output, "express@5.0.0") {
+			t.Fatalf("drift text output repeats package name: %q", output)
+		}
+	})
+
+	t.Run("drift rejects incompatible license filters", func(t *testing.T) {
+		repoDir := createTestRepo(t)
+		addFileAndCommit(t, repoDir, "package-lock.json", packageLockJSON, "Add lockfile")
+
+		cleanup := chdir(t, repoDir)
+		defer cleanup()
+
+		rootCmd := cmd.NewRootCmd()
+		rootCmd.SetArgs([]string{"licenses", "--drift", "--permissive", "--allow", "MIT"})
+		err := rootCmd.Execute()
+		if err == nil {
+			t.Fatal("expected licenses --drift with filters to fail")
+		}
+		if !strings.Contains(err.Error(), "--drift cannot be combined with --allow, --permissive") {
+			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 }

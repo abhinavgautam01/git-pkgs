@@ -376,9 +376,11 @@ git pkgs licenses               # show license for each dependency
 git pkgs licenses --permissive  # flag copyleft licenses
 git pkgs licenses --allow=MIT,Apache-2.0  # explicit allow list
 git pkgs licenses --group       # group output by license
+git pkgs licenses --drift       # detect installed-to-latest license changes
 ```
 
 Fetches license information from package registries. Exits with code 1 if violations are found, making it suitable for CI.
+Use `--drift` to compare resolved dependency versions with the latest package metadata and flag changes like MIT to GPL.
 
 ### Vulnerability scanning
 
