@@ -12,7 +12,7 @@ For best results, commit your lockfiles. Manifests show version ranges but lockf
 
 It works across many ecosystems (Gemfile, package.json, Dockerfile, GitHub Actions workflows) giving you one unified history instead of separate tools per ecosystem. The database lives in your `.git` directory where you can use it in CI to catch dependency changes in pull requests.
 
-The core commands (`list`, `history`, `blame`, `diff`, `stale`, etc.) work entirely from your git history with no network access. Additional commands fetch external data: `vulns` checks [OSV](https://osv.dev) for known CVEs, `outdated` and `licenses` query [ecosyste.ms](https://packages.ecosyste.ms/) for registry metadata, `deprecated` checks registries for deprecation metadata, and `changelog` fetches upstream changelogs so you can see what changed between versions.
+The core commands (`list`, `history`, `blame`, `diff`, `stale`, etc.) work entirely from your git history with no network access. Additional commands fetch external data: `vulns` checks [OSV](https://osv.dev) for known CVEs, `outdated`, `freshness`, `licenses`, and `funding` query [ecosyste.ms](https://packages.ecosyste.ms/) for registry metadata, `deprecated` checks registries for deprecation metadata, and `changelog` fetches upstream changelogs so you can see what changed between versions.
 
 ## Installation
 
@@ -47,6 +47,7 @@ git pkgs vulns blame    # who introduced each vulnerability
 git pkgs outdated       # find packages with newer versions
 git pkgs freshness      # release-age freshness metrics
 git pkgs deprecated     # find deprecated installed versions
+git pkgs funding        # show packages with funding links
 git pkgs changelog lodash -e npm --from 4.17.20 --to 4.17.21  # view changelog
 git pkgs update         # update all dependencies
 git pkgs add lodash     # add a package
@@ -280,6 +281,17 @@ git pkgs deprecated --format=json
 ```
 
 Checks the exact installed dependency versions against registries and reports versions marked as deprecated, including registry-provided messages when available.
+
+### Show funding info
+
+```bash
+git pkgs funding                # show dependencies with funding links
+git pkgs funding --missing      # show dependencies without funding links
+git pkgs funding --ecosystem=npm
+git pkgs funding --format=json
+```
+
+Checks ecosyste.ms package metadata for funding links so you can see which dependencies publish sponsorship information and which ones do not.
 
 ### View changelogs
 

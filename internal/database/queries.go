@@ -1699,6 +1699,13 @@ type CachedPackage struct {
 	EnrichedAt    time.Time `json:"enriched_at"`
 }
 
+// CachedPackageFunding represents cached funding data for a package.
+type CachedPackageFunding struct {
+	PURL         string    `json:"purl"`
+	FundingLinks []string  `json:"funding_links"`
+	SyncedAt     time.Time `json:"synced_at"`
+}
+
 // CachedVersion represents cached version data for a package.
 type CachedVersion struct {
 	PURL            string         `json:"purl"`
@@ -1772,6 +1779,66 @@ func (db *DB) GetCachedPackages(purls []string, staleDuration time.Duration) (ma
 	return result, nil
 }
 
+// GetCachedPackageFunding returns cached package funding data that isn't stale.
+func (db *DB) GetCachedPackageFunding(purls []string, staleDuration time.Duration) (map[string]*CachedPackageFunding, error) {
+	if len(purls) == 0 {
+		return make(map[string]*CachedPackageFunding), nil
+	}
+
+	staleThreshold := time.Now().Add(-staleDuration)
+	result := make(map[string]*CachedPackageFunding)
+
+	const batchSize = 500
+	for i := 0; i < len(purls); i += batchSize {
+		end := i + batchSize
+		if end > len(purls) {
+			end = len(purls)
+		}
+		batch := purls[i:end]
+
+		placeholders := make([]string, len(batch))
+		args := make([]interface{}, len(batch)+1)
+		args[0] = staleThreshold.Format(time.RFC3339)
+		for j, purl := range batch {
+			placeholders[j] = "?"
+			args[j+1] = purl
+		}
+
+		query := `SELECT purl, funding_links, funding_synced_at
+			FROM packages
+			WHERE funding_synced_at >= ? AND purl IN (` + strings.Join(placeholders, ",") + `)`
+
+		rows, err := db.Query(query, args...)
+		if err != nil {
+			return nil, err
+		}
+
+		for rows.Next() {
+			var cached CachedPackageFunding
+			var fundingLinks sql.NullString
+			var syncedAt string
+			if err := rows.Scan(&cached.PURL, &fundingLinks, &syncedAt); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			if fundingLinks.Valid && fundingLinks.String != "" {
+				_ = json.Unmarshal([]byte(fundingLinks.String), &cached.FundingLinks)
+			} else {
+				cached.FundingLinks = []string{}
+			}
+			cached.SyncedAt, _ = time.Parse(time.RFC3339, syncedAt)
+			result[cached.PURL] = &cached
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		_ = rows.Close()
+	}
+
+	return result, nil
+}
+
 // SavePackageEnrichment saves or updates enrichment data for a package.
 func (db *DB) SavePackageEnrichment(purl, ecosystem, name, latestVersion, license, registryURL, source string) error {
 	now := time.Now().Format(time.RFC3339)
@@ -1829,6 +1896,57 @@ func (db *DB) SavePackageEnrichmentBatch(packages []PackageEnrichmentData) error
 
 	for _, p := range packages {
 		_, err = stmt.Exec(p.PURL, p.Ecosystem, p.Name, p.LatestVersion, p.License, p.RegistryURL, p.Source, now, now, now)
+		if err != nil {
+			_ = stmt.Close()
+			_ = tx.Rollback()
+			return err
+		}
+	}
+
+	_ = stmt.Close()
+	return tx.Commit()
+}
+
+// PackageFundingData holds package funding data for batch saving.
+type PackageFundingData struct {
+	PURL         string
+	Ecosystem    string
+	Name         string
+	FundingLinks []string
+}
+
+// SavePackageFundingBatch saves package funding data in a single transaction.
+func (db *DB) SavePackageFundingBatch(packages []PackageFundingData) error {
+	if len(packages) == 0 {
+		return nil
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+
+	now := time.Now().Format(time.RFC3339)
+	stmt, err := tx.Prepare(`
+		INSERT INTO packages (purl, ecosystem, name, funding_links, funding_synced_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(purl) DO UPDATE SET
+			funding_links = excluded.funding_links,
+			funding_synced_at = excluded.funding_synced_at,
+			updated_at = excluded.updated_at`)
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+
+	for _, p := range packages {
+		raw, err := json.Marshal(p.FundingLinks)
+		if err != nil {
+			_ = stmt.Close()
+			_ = tx.Rollback()
+			return err
+		}
+		_, err = stmt.Exec(p.PURL, p.Ecosystem, p.Name, string(raw), now, now, now)
 		if err != nil {
 			_ = stmt.Close()
 			_ = tx.Rollback()

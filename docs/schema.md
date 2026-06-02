@@ -129,6 +129,8 @@ Caches package metadata from registries and vulnerability sync status.
 | homepage | text | Homepage URL |
 | repository_url | text | Source code repository URL |
 | registry_url | text | Package registry URL this data was fetched from |
+| funding_links | text | JSON-encoded package funding links |
+| funding_synced_at | datetime | When funding metadata was last fetched |
 | supplier_name | text | Package supplier/maintainer name |
 | supplier_type | text | Supplier type (person, organization) |
 | source | text | Data source: "ecosystems" or "registries" |
