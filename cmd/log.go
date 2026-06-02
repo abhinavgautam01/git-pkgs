@@ -25,6 +25,7 @@ func addLogCmd(parent *cobra.Command) {
 	const defaultLogLimit = 20
 	logCmd.Flags().IntP("limit", "n", defaultLogLimit, "Maximum number of commits to show")
 	logCmd.Flags().StringP("format", "f", "text", "Output format: text, json")
+	logCmd.Flags().Bool("exclude-bots", false, "Exclude commits by bot authors")
 	parent.AddCommand(logCmd)
 }
 
@@ -35,6 +36,7 @@ func runLog(cmd *cobra.Command, args []string) error {
 	until, _ := cmd.Flags().GetString("until")
 	limit, _ := cmd.Flags().GetInt("limit")
 	format, _ := cmd.Flags().GetString("format")
+	excludeBots, _ := cmd.Flags().GetBool("exclude-bots")
 
 	repo, err := git.OpenRepository(".")
 	if err != nil {
@@ -58,12 +60,13 @@ func runLog(cmd *cobra.Command, args []string) error {
 	}
 
 	commits, err := db.GetCommitsWithChanges(database.LogOptions{
-		BranchID:  branchInfo.ID,
-		Ecosystem: ecosystem,
-		Author:    author,
-		Since:     since,
-		Until:     until,
-		Limit:     limit,
+		BranchID:    branchInfo.ID,
+		Ecosystem:   ecosystem,
+		Author:      author,
+		Since:       since,
+		Until:       until,
+		Limit:       limit,
+		ExcludeBots: excludeBots,
 	})
 	if err != nil {
 		return fmt.Errorf("getting commits: %w", err)

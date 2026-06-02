@@ -59,6 +59,20 @@ func addFileAndCommit(t *testing.T, repoDir, path, content, message string) {
 	}
 }
 
+func setGitUser(t *testing.T, repoDir, name, email string) {
+	t.Helper()
+	for _, args := range [][]string{
+		{"git", "config", "user.name", name},
+		{"git", "config", "user.email", email},
+	} {
+		gitCmd := exec.Command(args[0], args[1:]...)
+		gitCmd.Dir = repoDir
+		if err := gitCmd.Run(); err != nil {
+			t.Fatalf("failed to run %v: %v", args, err)
+		}
+	}
+}
+
 func chdir(t *testing.T, dir string) func() {
 	t.Helper()
 	oldWd, err := os.Getwd()
