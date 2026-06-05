@@ -133,6 +133,8 @@ Caches package metadata from registries and vulnerability sync status.
 | funding_synced_at | datetime | When funding metadata was last fetched |
 | supplier_name | text | Package supplier/maintainer name |
 | supplier_type | text | Supplier type (person, organization) |
+| maintainers | text | JSON-encoded package maintainer data |
+| maintainers_synced_at | datetime | When maintainer data was last fetched |
 | source | text | Data source: "ecosystems" or "registries" |
 | enriched_at | datetime | When package metadata was last fetched |
 | vulns_synced_at | datetime | When vulnerabilities were last synced from OSV |

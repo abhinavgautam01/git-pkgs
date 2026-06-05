@@ -1756,6 +1756,13 @@ type CachedPackageFunding struct {
 	SyncedAt     time.Time `json:"synced_at"`
 }
 
+// CachedMaintainers represents cached package maintainer data.
+type CachedMaintainers struct {
+	PURL     string    `json:"purl"`
+	Data     string    `json:"data"`
+	SyncedAt time.Time `json:"synced_at"`
+}
+
 // CachedVersion represents cached version data for a package.
 type CachedVersion struct {
 	PURL            string         `json:"purl"`
@@ -1889,6 +1896,64 @@ func (db *DB) GetCachedPackageFunding(purls []string, staleDuration time.Duratio
 	return result, nil
 }
 
+// GetCachedMaintainers returns cached maintainer data for the given PURLs that isn't stale.
+func (db *DB) GetCachedMaintainers(purls []string, staleDuration time.Duration) (map[string]*CachedMaintainers, error) {
+	if len(purls) == 0 {
+		return make(map[string]*CachedMaintainers), nil
+	}
+
+	staleThreshold := time.Now().Add(-staleDuration)
+	result := make(map[string]*CachedMaintainers)
+
+	const batchSize = 500
+	for i := 0; i < len(purls); i += batchSize {
+		end := i + batchSize
+		if end > len(purls) {
+			end = len(purls)
+		}
+		batch := purls[i:end]
+
+		placeholders := make([]string, len(batch))
+		args := make([]interface{}, len(batch)+1)
+		args[0] = staleThreshold.Format(time.RFC3339)
+		for j, purl := range batch {
+			placeholders[j] = "?"
+			args[j+1] = purl
+		}
+
+		query := `SELECT purl, maintainers, maintainers_synced_at
+			FROM packages
+			WHERE maintainers_synced_at >= ? AND purl IN (` + strings.Join(placeholders, ",") + `)`
+
+		rows, err := db.Query(query, args...)
+		if err != nil {
+			return nil, err
+		}
+
+		for rows.Next() {
+			var cached CachedMaintainers
+			var maintainers sql.NullString
+			var syncedAt string
+			if err := rows.Scan(&cached.PURL, &maintainers, &syncedAt); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			if maintainers.Valid {
+				cached.Data = maintainers.String
+			}
+			cached.SyncedAt, _ = time.Parse(time.RFC3339, syncedAt)
+			result[cached.PURL] = &cached
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		_ = rows.Close()
+	}
+
+	return result, nil
+}
+
 // SavePackageEnrichment saves or updates enrichment data for a package.
 func (db *DB) SavePackageEnrichment(purl, ecosystem, name, latestVersion, license, registryURL, source string) error {
 	now := time.Now().Format(time.RFC3339)
@@ -1997,6 +2062,51 @@ func (db *DB) SavePackageFundingBatch(packages []PackageFundingData) error {
 			return err
 		}
 		_, err = stmt.Exec(p.PURL, p.Ecosystem, p.Name, string(raw), now, now, now)
+		if err != nil {
+			_ = stmt.Close()
+			_ = tx.Rollback()
+			return err
+		}
+	}
+
+	_ = stmt.Close()
+	return tx.Commit()
+}
+
+// PackageMaintainersData holds maintainer data for batch saving.
+type PackageMaintainersData struct {
+	PURL        string
+	Ecosystem   string
+	Name        string
+	Maintainers string
+}
+
+// SavePackageMaintainersBatch saves package maintainer data in a single transaction.
+func (db *DB) SavePackageMaintainersBatch(packages []PackageMaintainersData) error {
+	if len(packages) == 0 {
+		return nil
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+
+	now := time.Now().Format(time.RFC3339)
+	stmt, err := tx.Prepare(`
+		INSERT INTO packages (purl, ecosystem, name, maintainers, maintainers_synced_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(purl) DO UPDATE SET
+			maintainers = excluded.maintainers,
+			maintainers_synced_at = excluded.maintainers_synced_at,
+			updated_at = excluded.updated_at`)
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+
+	for _, p := range packages {
+		_, err = stmt.Exec(p.PURL, p.Ecosystem, p.Name, p.Maintainers, now, now, now)
 		if err != nil {
 			_ = stmt.Close()
 			_ = tx.Rollback()

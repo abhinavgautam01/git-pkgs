@@ -106,6 +106,8 @@ func (db *DB) CreateSchema() error {
 		funding_synced_at DATETIME,
 		supplier_name TEXT,
 		supplier_type TEXT,
+		maintainers TEXT,
+		maintainers_synced_at DATETIME,
 		source TEXT,
 		enriched_at DATETIME,
 		vulns_synced_at DATETIME,
