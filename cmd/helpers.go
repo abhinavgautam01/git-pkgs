@@ -64,7 +64,8 @@ func shortSHA(sha string) string {
 }
 
 func isResolvedDependency(d database.Dependency) bool {
-	return d.Requirement != "" && (d.ManifestKind == manifestKindLockfile || d.Ecosystem == "golang")
+	return d.Requirement != "" &&
+		(d.ManifestKind == manifestKindLockfile || d.Ecosystem == "golang" || d.Ecosystem == "maven")
 }
 
 func IsPURL(s string) bool {
