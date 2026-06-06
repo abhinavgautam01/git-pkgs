@@ -3,10 +3,12 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/git-pkgs/git-pkgs/internal/database"
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 func addNotesCmd(parent *cobra.Command) {
@@ -43,6 +45,16 @@ notes (e.g. "security", "audit", "review"). The default namespace is empty.`,
 	appendCmd.Flags().String("namespace", "", "Note namespace for categorization")
 	appendCmd.Flags().String("origin", "git-pkgs", "Tool or system that created this note")
 	appendCmd.Flags().StringArray("set", nil, "Set metadata key=value pair")
+
+	importCmd := &cobra.Command{
+		Use:   "import <file>",
+		Short: "Import notes from a YAML or JSON file",
+		Long:  `Import notes from a YAML or JSON file. Imported notes are upserted by purl+namespace.`,
+		Args:  cobra.ExactArgs(1),
+		RunE:  runNotesImport,
+	}
+	importCmd.Flags().String("namespace", "", "Default namespace for imported notes")
+	importCmd.Flags().String("origin", "git-pkgs", "Tool or system that created imported notes")
 
 	showCmd := &cobra.Command{
 		Use:   "show <purl>",
@@ -82,7 +94,7 @@ notes (e.g. "security", "audit", "review"). The default namespace is empty.`,
 	namespacesCmd.Flags().String("purl-filter", "", "Filter by purl substring")
 	namespacesCmd.Flags().StringP("format", "f", "text", "Output format: text, json")
 
-	notesCmd.AddCommand(addCmd, appendCmd, showCmd, listCmd, removeCmd, namespacesCmd)
+	notesCmd.AddCommand(addCmd, appendCmd, importCmd, showCmd, listCmd, removeCmd, namespacesCmd)
 	parent.AddCommand(notesCmd)
 }
 
@@ -163,6 +175,79 @@ func runNotesAppend(cmd *cobra.Command, args []string) error {
 
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Appended to note for %s\n", purl)
 	return nil
+}
+
+type noteImportEntry struct {
+	PURL      string            `json:"purl" yaml:"purl"`
+	Namespace string            `json:"namespace" yaml:"namespace"`
+	Origin    string            `json:"origin" yaml:"origin"`
+	Message   string            `json:"message" yaml:"message"`
+	Metadata  map[string]string `json:"metadata" yaml:"metadata"`
+}
+
+func runNotesImport(cmd *cobra.Command, args []string) error {
+	path := args[0]
+	namespace, _ := cmd.Flags().GetString("namespace")
+	origin, _ := cmd.Flags().GetString("origin")
+
+	notes, err := loadNotesImportFile(path, namespace, origin)
+	if err != nil {
+		return err
+	}
+
+	_, db, err := openDatabase()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = db.Close() }()
+
+	for _, note := range notes {
+		if err := db.InsertNote(note); err != nil {
+			return fmt.Errorf("importing note for %s: %w", note.PURL, err)
+		}
+	}
+
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Imported %d notes from %s\n", len(notes), path)
+	return nil
+}
+
+func loadNotesImportFile(path, defaultNamespace, defaultOrigin string) ([]database.Note, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading notes file: %w", err)
+	}
+
+	var entries []noteImportEntry
+	if err := yaml.Unmarshal(data, &entries); err != nil {
+		return nil, fmt.Errorf("parsing notes file: %w", err)
+	}
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("notes file contains no notes")
+	}
+
+	notes := make([]database.Note, 0, len(entries))
+	for i, entry := range entries {
+		if strings.TrimSpace(entry.PURL) == "" {
+			return nil, fmt.Errorf("note %d missing purl", i+1)
+		}
+
+		note := database.Note{
+			PURL:      strings.TrimSpace(entry.PURL),
+			Namespace: entry.Namespace,
+			Origin:    entry.Origin,
+			Message:   entry.Message,
+			Metadata:  entry.Metadata,
+		}
+		if note.Namespace == "" {
+			note.Namespace = defaultNamespace
+		}
+		if note.Origin == "" {
+			note.Origin = defaultOrigin
+		}
+		notes = append(notes, note)
+	}
+
+	return notes, nil
 }
 
 func runNotesShow(cmd *cobra.Command, args []string) error {
