@@ -528,6 +528,65 @@ func TestComputeDiff_DuplicatePackageVersionsInLockfile(t *testing.T) {
 	}
 }
 
+func TestComputeDiffByEcosystem_IgnoresLockfileMigration(t *testing.T) {
+	fromDeps := []database.Dependency{
+		{Name: "lodash", Ecosystem: "npm", Requirement: "^4.0.0", ManifestPath: "package.json", ManifestKind: "manifest", DependencyType: "runtime"},
+		{Name: "lodash", Ecosystem: "npm", Requirement: "4.17.21", ManifestPath: "package-lock.json", ManifestKind: manifestKindLockfile, DependencyType: "development"},
+		{Name: "express", Ecosystem: "npm", Requirement: "4.18.2", ManifestPath: "package-lock.json", ManifestKind: manifestKindLockfile, DependencyType: "runtime"},
+	}
+	toDeps := []database.Dependency{
+		{Name: "lodash", Ecosystem: "npm", Requirement: "^4.0.0", ManifestPath: "package.json", ManifestKind: "manifest", DependencyType: "runtime"},
+		{Name: "lodash", Ecosystem: "npm", Requirement: "4.17.21", ManifestPath: "pnpm-lock.yaml", ManifestKind: manifestKindLockfile},
+		{Name: "express", Ecosystem: "npm", Requirement: "4.18.2", ManifestPath: "pnpm-lock.yaml", ManifestKind: manifestKindLockfile},
+	}
+
+	defaultResult := computeDiff(fromDeps, toDeps)
+	if len(defaultResult.Added) != 2 {
+		t.Fatalf("default added = %d, want 2: %+v", len(defaultResult.Added), defaultResult.Added)
+	}
+	if len(defaultResult.Removed) != 2 {
+		t.Fatalf("default removed = %d, want 2: %+v", len(defaultResult.Removed), defaultResult.Removed)
+	}
+
+	result := computeDiffBy(fromDeps, toDeps, diffByEcosystem)
+	if len(result.Added) != 0 {
+		t.Fatalf("added = %d, want 0: %+v", len(result.Added), result.Added)
+	}
+	if len(result.Modified) != 0 {
+		t.Fatalf("modified = %d, want 0: %+v", len(result.Modified), result.Modified)
+	}
+	if len(result.Removed) != 0 {
+		t.Fatalf("removed = %d, want 0: %+v", len(result.Removed), result.Removed)
+	}
+}
+
+func TestComputeDiffByEcosystem_ReportsVersionChangeAcrossLockfileMigration(t *testing.T) {
+	fromDeps := []database.Dependency{
+		{Name: "express", Ecosystem: "npm", Requirement: "4.18.2", ManifestPath: "package-lock.json", ManifestKind: manifestKindLockfile},
+	}
+	toDeps := []database.Dependency{
+		{Name: "express", Ecosystem: "npm", Requirement: "5.0.0", ManifestPath: "pnpm-lock.yaml", ManifestKind: manifestKindLockfile},
+	}
+
+	result := computeDiffBy(fromDeps, toDeps, diffByEcosystem)
+	if len(result.Added) != 0 {
+		t.Fatalf("added = %d, want 0: %+v", len(result.Added), result.Added)
+	}
+	if len(result.Removed) != 0 {
+		t.Fatalf("removed = %d, want 0: %+v", len(result.Removed), result.Removed)
+	}
+	if len(result.Modified) != 1 {
+		t.Fatalf("modified = %d, want 1: %+v", len(result.Modified), result.Modified)
+	}
+	entry := result.Modified[0]
+	if entry.FromRequirement != "4.18.2" || entry.ToRequirement != "5.0.0" {
+		t.Fatalf("requirements = %s -> %s, want 4.18.2 -> 5.0.0", entry.FromRequirement, entry.ToRequirement)
+	}
+	if entry.ManifestPath != "pnpm-lock.yaml" {
+		t.Fatalf("manifest path = %q, want pnpm-lock.yaml", entry.ManifestPath)
+	}
+}
+
 func TestComputeDiff_MultiVersionUpgrade(t *testing.T) {
 	// glob exists at three versions; one version gets a patch bump.
 	// Should produce 1 Modified, not 1 Added + 1 Removed.
