@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/git-pkgs/enrichment"
@@ -40,6 +42,7 @@ Licenses are normalized to SPDX identifiers when possible.`,
 	licensesCmd.Flags().Bool("copyleft", false, "Flag copyleft licenses (GPL, AGPL)")
 	licensesCmd.Flags().Bool("unknown", false, "Flag packages with unknown licenses")
 	licensesCmd.Flags().Bool("group", false, "Group output by license")
+	licensesCmd.Flags().Bool("drift", false, "Detect dependencies whose license changed between installed and latest versions")
 	parent.AddCommand(licensesCmd)
 }
 
@@ -55,6 +58,29 @@ type LicenseInfo struct {
 	FlagReason   string   `json:"flag_reason,omitempty"`
 }
 
+type LicenseDriftSummary struct {
+	TotalDependencies      int `json:"total_dependencies"`
+	CheckedDependencies    int `json:"checked_dependencies"`
+	DriftedDependencies    int `json:"drifted_dependencies"`
+	UnresolvedDependencies int `json:"unresolved_dependencies"`
+}
+
+type LicenseDriftEntry struct {
+	Name           string `json:"name"`
+	Ecosystem      string `json:"ecosystem"`
+	CurrentVersion string `json:"current_version"`
+	LatestVersion  string `json:"latest_version,omitempty"`
+	CurrentLicense string `json:"current_license"`
+	LatestLicense  string `json:"latest_license"`
+	ManifestPath   string `json:"manifest_path"`
+	PURL           string `json:"purl,omitempty"`
+}
+
+type LicenseDriftResult struct {
+	Summary      LicenseDriftSummary `json:"summary"`
+	Dependencies []LicenseDriftEntry `json:"dependencies"`
+}
+
 func runLicenses(cmd *cobra.Command, args []string) error {
 	commit, _ := cmd.Flags().GetString("commit")
 	branchName, _ := cmd.Flags().GetString("branch")
@@ -66,6 +92,13 @@ func runLicenses(cmd *cobra.Command, args []string) error {
 	flagCopyleft, _ := cmd.Flags().GetBool("copyleft")
 	flagUnknown, _ := cmd.Flags().GetBool("unknown")
 	groupBy, _ := cmd.Flags().GetBool("group")
+	driftOnly, _ := cmd.Flags().GetBool("drift")
+
+	if driftOnly {
+		if err := validateLicenseDriftFlags(allowList, denyList, flagPermissive, flagCopyleft, flagUnknown, groupBy); err != nil {
+			return err
+		}
+	}
 
 	repo, err := git.OpenRepository(".")
 	if err != nil {
@@ -81,6 +114,10 @@ func runLicenses(cmd *cobra.Command, args []string) error {
 	}
 
 	deps = filterByEcosystem(deps, ecosystem)
+
+	if driftOnly {
+		return runLicenseDrift(cmd, db, deps, format)
+	}
 
 	// Filter to manifest dependencies (direct deps)
 	var directDeps []database.Dependency
@@ -254,10 +291,37 @@ func runLicenses(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+func validateLicenseDriftFlags(allowList, denyList []string, flagPermissive, flagCopyleft, flagUnknown, groupBy bool) error {
+	var incompatible []string
+	if len(allowList) > 0 {
+		incompatible = append(incompatible, "--allow")
+	}
+	if len(denyList) > 0 {
+		incompatible = append(incompatible, "--deny")
+	}
+	if flagPermissive {
+		incompatible = append(incompatible, "--permissive")
+	}
+	if flagCopyleft {
+		incompatible = append(incompatible, "--copyleft")
+	}
+	if flagUnknown {
+		incompatible = append(incompatible, "--unknown")
+	}
+	if groupBy {
+		incompatible = append(incompatible, "--group")
+	}
+	if len(incompatible) == 0 {
+		return nil
+	}
+	return fmt.Errorf("--drift cannot be combined with %s", strings.Join(incompatible, ", "))
+}
+
 type licenseData struct {
-	License   string
-	Name      string
-	Ecosystem string
+	License       string
+	Name          string
+	Ecosystem     string
+	LatestVersion string
 }
 
 func getLicenseData(db *database.DB, purls []string, purlToDep map[string]database.Dependency) (map[string]*licenseData, error) {
@@ -272,9 +336,10 @@ func getLicenseData(db *database.DB, purls []string, purlToDep map[string]databa
 		}
 		for purl, cp := range cached {
 			result[purl] = &licenseData{
-				License:   cp.License,
-				Name:      cp.Name,
-				Ecosystem: cp.Ecosystem,
+				License:       cp.License,
+				Name:          cp.Name,
+				Ecosystem:     cp.Ecosystem,
+				LatestVersion: cp.LatestVersion,
 			}
 		}
 		// Find uncached PURLs
@@ -308,6 +373,7 @@ func getLicenseData(db *database.DB, purls []string, purlToDep map[string]databa
 			if pkg != nil {
 				data.Name = pkg.Name
 				data.Ecosystem = pkg.Ecosystem
+				data.LatestVersion = pkg.LatestVersion
 				// Normalize license to SPDX identifier
 				if pkg.License != "" {
 					if normalized, err := spdx.Normalize(pkg.License); err == nil {
@@ -328,6 +394,369 @@ func getLicenseData(db *database.DB, purls []string, purlToDep map[string]databa
 	}
 
 	return result, nil
+}
+
+func runLicenseDrift(cmd *cobra.Command, db *database.DB, deps []database.Dependency, format string) error {
+	resolved := make([]database.Dependency, 0, len(deps))
+	for _, dep := range deps {
+		if isResolvedDependency(dep) {
+			resolved = append(resolved, dep)
+		}
+	}
+
+	if len(resolved) == 0 {
+		result := emptyLicenseDriftResult()
+		if format == formatJSON {
+			return outputLicenseDriftJSON(cmd, result)
+		}
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No resolved dependencies found.")
+		return nil
+	}
+
+	result, err := computeLicenseDrift(db, resolved)
+	if err != nil {
+		return err
+	}
+
+	switch format {
+	case formatJSON:
+		return outputLicenseDriftJSON(cmd, result)
+	case "csv":
+		return outputLicenseDriftCSV(cmd, result.Dependencies)
+	default:
+		outputLicenseDriftText(cmd, result)
+		return nil
+	}
+}
+
+func computeLicenseDrift(db *database.DB, deps []database.Dependency) (*LicenseDriftResult, error) {
+	result := emptyLicenseDriftResult()
+	result.Summary.TotalDependencies = len(deps)
+
+	packagePURLs := make([]string, 0, len(deps))
+	purlToDep := make(map[string]database.Dependency)
+	seenPURLs := make(map[string]bool)
+	for _, dep := range deps {
+		packagePURL := licensePackagePURLForDependency(dep)
+		if packagePURL == "" {
+			continue
+		}
+		if !seenPURLs[packagePURL] {
+			seenPURLs[packagePURL] = true
+			packagePURLs = append(packagePURLs, packagePURL)
+			purlToDep[packagePURL] = dep
+		}
+	}
+
+	packageLicenses, err := getLicenseData(db, packagePURLs, purlToDep)
+	if err != nil {
+		return nil, fmt.Errorf("looking up package licenses: %w", err)
+	}
+
+	versionLicenses, err := loadLicenseDriftVersionLicenses(db, deps)
+	if err != nil {
+		return nil, fmt.Errorf("looking up version licenses: %w", err)
+	}
+
+	seenDeps := make(map[string]bool)
+	for _, dep := range deps {
+		packagePURL := licensePackagePURLForDependency(dep)
+		versionedPURL := versionedPURLForDependency(dep)
+		key := packagePURL + "\x00" + dep.Requirement + "\x00" + dep.ManifestPath
+		if packagePURL == "" || versionedPURL == "" || seenDeps[key] {
+			continue
+		}
+		seenDeps[key] = true
+
+		packageData := packageLicenses[packagePURL]
+		currentLicense := normalizeLicenseString(versionLicenses[versionedPURL])
+		latestLicense := ""
+		latestVersion := ""
+		if packageData != nil {
+			latestLicense = normalizeLicenseString(packageData.License)
+			latestVersion = packageData.LatestVersion
+		}
+
+		if currentLicense == "" || latestLicense == "" {
+			result.Summary.UnresolvedDependencies++
+			continue
+		}
+
+		result.Summary.CheckedDependencies++
+		if currentLicense == latestLicense {
+			continue
+		}
+
+		result.Summary.DriftedDependencies++
+		result.Dependencies = append(result.Dependencies, LicenseDriftEntry{
+			Name:           dep.Name,
+			Ecosystem:      dep.Ecosystem,
+			CurrentVersion: dep.Requirement,
+			LatestVersion:  latestVersion,
+			CurrentLicense: currentLicense,
+			LatestLicense:  latestLicense,
+			ManifestPath:   dep.ManifestPath,
+			PURL:           versionedPURL,
+		})
+	}
+
+	sort.Slice(result.Dependencies, func(i, j int) bool {
+		if result.Dependencies[i].Name != result.Dependencies[j].Name {
+			return result.Dependencies[i].Name < result.Dependencies[j].Name
+		}
+		if result.Dependencies[i].ManifestPath != result.Dependencies[j].ManifestPath {
+			return result.Dependencies[i].ManifestPath < result.Dependencies[j].ManifestPath
+		}
+		return result.Dependencies[i].CurrentVersion < result.Dependencies[j].CurrentVersion
+	})
+
+	return result, nil
+}
+
+func licensePackagePURLForDependency(dep database.Dependency) string {
+	versionedPURL := versionedPURLForDependency(dep)
+	if versionedPURL != "" {
+		return packagePURLFromVersioned(versionedPURL)
+	}
+	return purl.MakePURLString(dep.Ecosystem, dep.Name, "")
+}
+
+func loadLicenseDriftVersionLicenses(db *database.DB, deps []database.Dependency) (map[string]string, error) {
+	needed := make(map[string]map[string]bool)
+	for _, dep := range deps {
+		versionedPURL := versionedPURLForDependency(dep)
+		packagePURL := licensePackagePURLForDependency(dep)
+		if versionedPURL == "" || packagePURL == "" || dep.Requirement == "" {
+			continue
+		}
+		if needed[packagePURL] == nil {
+			needed[packagePURL] = make(map[string]bool)
+		}
+		needed[packagePURL][dep.Requirement] = true
+	}
+
+	result := cachedLicenseDriftVersionLicenses(db, needed)
+	var missing []licenseDriftVersionLookup
+	for packagePURL, versions := range needed {
+		for version := range versions {
+			versionedPURL := licenseVersionedPURL(packagePURL, version)
+			if versionedPURL == "" || result[versionedPURL] != "" {
+				continue
+			}
+			missing = append(missing, licenseDriftVersionLookup{
+				PackagePURL:   packagePURL,
+				VersionedPURL: versionedPURL,
+			})
+		}
+	}
+	if len(missing) == 0 {
+		return result, nil
+	}
+
+	client, err := NewEnrichmentClient(enrichment.WithUserAgent(userAgent))
+	if err != nil {
+		return nil, err
+	}
+
+	const licenseDriftLookupTimeout = 5 * time.Minute
+	ctx, cancel := context.WithTimeout(context.Background(), licenseDriftLookupTimeout)
+	defer cancel()
+
+	fetched, fetchErrors := fetchLicenseDriftVersions(ctx, client, missing)
+	for _, fetchedVersion := range fetched {
+		saveLicenseDriftVersion(db, fetchedVersion.PackagePURL, fetchedVersion.VersionedPURL, fetchedVersion.Version)
+		if fetchedVersion.Version == nil || fetchedVersion.Version.License == "" {
+			continue
+		}
+		result[fetchedVersion.VersionedPURL] = normalizeLicenseString(fetchedVersion.Version.License)
+	}
+	if len(fetchErrors) == len(missing) {
+		return nil, fmt.Errorf("fetching license drift metadata failed for all %d uncached versions: %w",
+			len(missing), errors.Join(fetchErrors...))
+	}
+
+	return result, nil
+}
+
+type licenseDriftVersionLookup struct {
+	PackagePURL   string
+	VersionedPURL string
+}
+
+type fetchedLicenseDriftVersion struct {
+	licenseDriftVersionLookup
+	Version *enrichment.VersionInfo
+}
+
+func fetchLicenseDriftVersions(
+	ctx context.Context,
+	client enrichment.Client,
+	missing []licenseDriftVersionLookup,
+) ([]fetchedLicenseDriftVersion, []error) {
+	const licenseDriftLookupConcurrency = 8
+
+	workers := licenseDriftLookupConcurrency
+	if len(missing) < workers {
+		workers = len(missing)
+	}
+	jobs := make(chan licenseDriftVersionLookup)
+	results := make(chan fetchedLicenseDriftVersion, len(missing))
+	errorsCh := make(chan error, len(missing))
+
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for range workers {
+		go func() {
+			defer wg.Done()
+			for lookup := range jobs {
+				versionInfo, err := client.GetVersion(ctx, lookup.VersionedPURL)
+				if err != nil {
+					errorsCh <- fmt.Errorf("%s: %w", lookup.VersionedPURL, err)
+					continue
+				}
+				results <- fetchedLicenseDriftVersion{
+					licenseDriftVersionLookup: lookup,
+					Version:                   versionInfo,
+				}
+			}
+		}()
+	}
+
+	for _, lookup := range missing {
+		jobs <- lookup
+	}
+	close(jobs)
+	wg.Wait()
+	close(results)
+	close(errorsCh)
+
+	var fetched []fetchedLicenseDriftVersion
+	for result := range results {
+		fetched = append(fetched, result)
+	}
+	var fetchErrors []error
+	for err := range errorsCh {
+		fetchErrors = append(fetchErrors, err)
+	}
+	return fetched, fetchErrors
+}
+
+func cachedLicenseDriftVersionLicenses(db *database.DB, needed map[string]map[string]bool) map[string]string {
+	result := make(map[string]string)
+	if db == nil {
+		return result
+	}
+
+	for packagePURL := range needed {
+		cached, err := db.GetCachedVersions(packagePURL, enrichmentCacheTTL)
+		if err != nil {
+			continue
+		}
+		for _, cachedVersion := range cached {
+			if cachedVersion.License == "" {
+				continue
+			}
+			result[cachedVersion.PURL] = normalizeLicenseString(cachedVersion.License)
+		}
+	}
+	return result
+}
+
+func saveLicenseDriftVersion(db *database.DB, packagePURL string, versionedPURL string, versionInfo *enrichment.VersionInfo) {
+	if db == nil || versionInfo == nil || versionedPURL == "" {
+		return
+	}
+
+	_ = db.SaveVersions([]database.CachedVersion{{
+		PURL:        versionedPURL,
+		PackagePURL: packagePURL,
+		License:     normalizeLicenseString(versionInfo.License),
+		PublishedAt: versionInfo.PublishedAt,
+	}})
+}
+
+func licenseVersionedPURL(packagePURL string, version string) string {
+	if packagePURL == "" || version == "" {
+		return ""
+	}
+	parsed, err := purl.Parse(packagePURL)
+	if err != nil {
+		return ""
+	}
+	return parsed.WithVersion(version).String()
+}
+
+func normalizeLicenseString(license string) string {
+	license = strings.TrimSpace(license)
+	if license == "" {
+		return ""
+	}
+	if normalized, err := spdx.Normalize(license); err == nil {
+		return normalized
+	}
+	return license
+}
+
+func emptyLicenseDriftResult() *LicenseDriftResult {
+	return &LicenseDriftResult{
+		Dependencies: []LicenseDriftEntry{},
+	}
+}
+
+func outputLicenseDriftJSON(cmd *cobra.Command, result *LicenseDriftResult) error {
+	enc := json.NewEncoder(cmd.OutOrStdout())
+	enc.SetIndent("", "  ")
+	return enc.Encode(result)
+}
+
+func outputLicenseDriftCSV(cmd *cobra.Command, entries []LicenseDriftEntry) error {
+	w := csv.NewWriter(cmd.OutOrStdout())
+	defer w.Flush()
+
+	if err := w.Write([]string{"Name", "Ecosystem", "Current Version", "Latest Version", "Current License", "Latest License", "Manifest", "PURL"}); err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if err := w.Write([]string{
+			entry.Name,
+			entry.Ecosystem,
+			entry.CurrentVersion,
+			entry.LatestVersion,
+			entry.CurrentLicense,
+			entry.LatestLicense,
+			entry.ManifestPath,
+			entry.PURL,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func outputLicenseDriftText(cmd *cobra.Command, result *LicenseDriftResult) {
+	if len(result.Dependencies) == 0 {
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No license drift detected.")
+		if result.Summary.UnresolvedDependencies > 0 {
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Unresolved dependencies: %d\n", result.Summary.UnresolvedDependencies)
+		}
+		return
+	}
+
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Found %d dependencies with license drift:\n\n", len(result.Dependencies))
+	for _, entry := range result.Dependencies {
+		latestVersion := entry.LatestVersion
+		if latestVersion == "" {
+			latestVersion = "latest"
+		}
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s (%s): %s %s -> %s %s\n",
+			entry.Name,
+			entry.Ecosystem,
+			entry.CurrentVersion,
+			entry.CurrentLicense,
+			latestVersion,
+			entry.LatestLicense,
+		)
+	}
 }
 
 func outputLicensesJSON(cmd *cobra.Command, infos []LicenseInfo) error {
