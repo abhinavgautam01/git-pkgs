@@ -1763,6 +1763,17 @@ type CachedMaintainers struct {
 	SyncedAt time.Time `json:"synced_at"`
 }
 
+// CachedPackageHealth represents cached package maintenance health data.
+type CachedPackageHealth struct {
+	PURL                   string    `json:"purl"`
+	MaintainerCount        int       `json:"maintainer_count"`
+	Downloads              int       `json:"downloads"`
+	DownloadsPeriod        string    `json:"downloads_period"`
+	DependentPackagesCount int       `json:"dependent_packages_count"`
+	DependentReposCount    int       `json:"dependent_repos_count"`
+	SyncedAt               time.Time `json:"synced_at"`
+}
+
 // CachedVersion represents cached version data for a package.
 type CachedVersion struct {
 	PURL            string         `json:"purl"`
@@ -1954,6 +1965,89 @@ func (db *DB) GetCachedMaintainers(purls []string, staleDuration time.Duration) 
 	return result, nil
 }
 
+// GetCachedPackageHealth returns cached package health data that isn't stale.
+func (db *DB) GetCachedPackageHealth(purls []string, staleDuration time.Duration) (map[string]*CachedPackageHealth, error) {
+	if len(purls) == 0 {
+		return make(map[string]*CachedPackageHealth), nil
+	}
+
+	staleThreshold := time.Now().Add(-staleDuration)
+	result := make(map[string]*CachedPackageHealth)
+
+	const batchSize = 500
+	for i := 0; i < len(purls); i += batchSize {
+		end := i + batchSize
+		if end > len(purls) {
+			end = len(purls)
+		}
+		batch := purls[i:end]
+
+		placeholders := make([]string, len(batch))
+		args := make([]interface{}, len(batch)+1)
+		args[0] = staleThreshold.Format(time.RFC3339)
+		for j, purl := range batch {
+			placeholders[j] = "?"
+			args[j+1] = purl
+		}
+
+		query := `SELECT purl, maintainers, downloads, downloads_period, dependent_packages_count, dependent_repos_count, health_synced_at
+			FROM packages
+			WHERE health_synced_at >= ? AND purl IN (` + strings.Join(placeholders, ",") + `)`
+
+		rows, err := db.Query(query, args...)
+		if err != nil {
+			return nil, err
+		}
+
+		for rows.Next() {
+			var maintainers sql.NullString
+			var cached CachedPackageHealth
+			var downloads, dependentPackages, dependentRepos sql.NullInt64
+			var downloadsPeriod sql.NullString
+			var syncedAt string
+			if err := rows.Scan(
+				&cached.PURL,
+				&maintainers,
+				&downloads,
+				&downloadsPeriod,
+				&dependentPackages,
+				&dependentRepos,
+				&syncedAt,
+			); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			if maintainers.Valid && maintainers.String != "" {
+				var parsed []json.RawMessage
+				if err := json.Unmarshal([]byte(maintainers.String), &parsed); err == nil {
+					cached.MaintainerCount = len(parsed)
+				}
+			}
+			if downloads.Valid {
+				cached.Downloads = int(downloads.Int64)
+			}
+			if downloadsPeriod.Valid {
+				cached.DownloadsPeriod = downloadsPeriod.String
+			}
+			if dependentPackages.Valid {
+				cached.DependentPackagesCount = int(dependentPackages.Int64)
+			}
+			if dependentRepos.Valid {
+				cached.DependentReposCount = int(dependentRepos.Int64)
+			}
+			cached.SyncedAt, _ = time.Parse(time.RFC3339, syncedAt)
+			result[cached.PURL] = &cached
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		_ = rows.Close()
+	}
+
+	return result, nil
+}
+
 // SavePackageEnrichment saves or updates enrichment data for a package.
 func (db *DB) SavePackageEnrichment(purl, ecosystem, name, latestVersion, license, registryURL, source string) error {
 	now := time.Now().Format(time.RFC3339)
@@ -2107,6 +2201,72 @@ func (db *DB) SavePackageMaintainersBatch(packages []PackageMaintainersData) err
 
 	for _, p := range packages {
 		_, err = stmt.Exec(p.PURL, p.Ecosystem, p.Name, p.Maintainers, now, now, now)
+		if err != nil {
+			_ = stmt.Close()
+			_ = tx.Rollback()
+			return err
+		}
+	}
+
+	_ = stmt.Close()
+	return tx.Commit()
+}
+
+// PackageHealthData holds package maintenance health data for batch saving.
+type PackageHealthData struct {
+	PURL                   string
+	Ecosystem              string
+	Name                   string
+	Downloads              int
+	DownloadsPeriod        string
+	DependentPackagesCount int
+	DependentReposCount    int
+}
+
+// SavePackageHealthBatch saves package health data in a single transaction.
+func (db *DB) SavePackageHealthBatch(packages []PackageHealthData) error {
+	if len(packages) == 0 {
+		return nil
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+
+	now := time.Now().Format(time.RFC3339)
+	stmt, err := tx.Prepare(`
+		INSERT INTO packages (
+			purl, ecosystem, name, downloads, downloads_period,
+			dependent_packages_count, dependent_repos_count, health_synced_at,
+			created_at, updated_at
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(purl) DO UPDATE SET
+			downloads = excluded.downloads,
+			downloads_period = excluded.downloads_period,
+			dependent_packages_count = excluded.dependent_packages_count,
+			dependent_repos_count = excluded.dependent_repos_count,
+			health_synced_at = excluded.health_synced_at,
+			updated_at = excluded.updated_at`)
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+
+	for _, p := range packages {
+		_, err = stmt.Exec(
+			p.PURL,
+			p.Ecosystem,
+			p.Name,
+			p.Downloads,
+			p.DownloadsPeriod,
+			p.DependentPackagesCount,
+			p.DependentReposCount,
+			now,
+			now,
+			now,
+		)
 		if err != nil {
 			_ = stmt.Close()
 			_ = tx.Rollback()

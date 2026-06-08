@@ -131,10 +131,15 @@ Caches package metadata from registries and vulnerability sync status.
 | registry_url | text | Package registry URL this data was fetched from |
 | funding_links | text | JSON-encoded package funding links |
 | funding_synced_at | datetime | When funding metadata was last fetched |
-| supplier_name | text | Package supplier/maintainer name |
-| supplier_type | text | Supplier type (person, organization) |
 | maintainers | text | JSON-encoded package maintainer data |
 | maintainers_synced_at | datetime | When maintainer data was last fetched |
+| downloads | integer | Package download count from metadata source |
+| downloads_period | text | Period the download count covers |
+| dependent_packages_count | integer | Number of packages depending on this package |
+| dependent_repos_count | integer | Number of repositories depending on this package |
+| health_synced_at | datetime | When maintenance health metadata was last fetched |
+| supplier_name | text | Package supplier/maintainer name |
+| supplier_type | text | Supplier type (person, organization) |
 | source | text | Data source: "ecosystems" or "registries" |
 | enriched_at | datetime | When package metadata was last fetched |
 | vulns_synced_at | datetime | When vulnerabilities were last synced from OSV |

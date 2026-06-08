@@ -2,7 +2,7 @@
 
 git-pkgs walks a repository's commit history, parses manifest files at each commit, and stores dependency changes in a SQLite database. This lets you query what changed, when, and who did it.
 
-The tool works with two types of data. Intrinsic data comes from your git history: dependency names, versions from manifests, who added them, when, and why. Commands like `list`, `history`, `blame`, `diff`, and `stale` use only intrinsic data and require no network access. Extrinsic data comes from external sources: vulnerability info from [OSV](https://osv.dev), and registry metadata (latest versions, licenses, funding links, maintainer data, deprecation status) from [ecosyste.ms](https://packages.ecosyste.ms/) and package registries. Commands like `vulns`, `outdated`, `freshness`, `licenses`, `deprecated`, `funding`, and `maintainers` fetch and cache this external data.
+The tool works with two types of data. Intrinsic data comes from your git history: dependency names, versions from manifests, who added them, when, and why. Commands like `list`, `history`, `blame`, `diff`, and `stale` use only intrinsic data and require no network access. Extrinsic data comes from external sources: vulnerability info from [OSV](https://osv.dev), and registry metadata (latest versions, licenses, funding links, maintainer data, deprecation status, maintenance health signals) from [ecosyste.ms](https://packages.ecosyste.ms/) and package registries. Commands like `vulns`, `outdated`, `freshness`, `licenses`, `deprecated`, `funding`, `maintainers`, and `health` fetch and cache this external data.
 
 ## Package Structure
 
@@ -150,14 +150,14 @@ See [vulns.md](vulns.md) for command documentation.
 
 ## Package Enrichment
 
-The `outdated`, `freshness`, `deprecated`, `funding`, `maintainers`, `changelog`, `licenses`, `sbom`, and `integrity --registry` commands fetch metadata from external sources. The [`github.com/git-pkgs/enrichment`](https://github.com/git-pkgs/enrichment) library provides a unified interface with two backends:
+The `outdated`, `freshness`, `deprecated`, `funding`, `maintainers`, `health`, `changelog`, `licenses`, `sbom`, and `integrity --registry` commands fetch metadata from external sources. The [`github.com/git-pkgs/enrichment`](https://github.com/git-pkgs/enrichment) library provides a unified interface with two backends:
 
 - **ecosyste.ms** - Bulk API queries via [ecosyste-ms/ecosystems-go](https://github.com/ecosyste-ms/ecosystems-go). Efficient for public packages.
 - **registries** - Direct queries to package registries via [git-pkgs/registries](https://github.com/git-pkgs/registries). Required for private registries.
 
 By default, a hybrid approach routes requests based on PURL qualifiers: packages with a `repository_url` qualifier (indicating a private registry) go directly to that registry, while public packages go through ecosyste.ms. Set `git config pkgs.direct true` or `GIT_PKGS_DIRECT=1` to skip ecosyste.ms and query all registries directly.
 
-Data is cached in the `packages` and `versions` tables with a 24-hour TTL. The `packages` table stores provenance: `repository_url` (the registry queried) and `source` (ecosystems or registries). The `funding` command stores package funding links in `packages`, the `maintainers` command stores package maintainer lists in `packages`, and the `deprecated` command uses the `versions` cache and fetches exact-version status from registries when cached deprecation metadata is missing.
+Data is cached in the `packages` and `versions` tables with a 24-hour TTL. The `packages` table stores provenance: `repository_url` (the registry queried) and `source` (ecosystems or registries). The `funding` command stores package funding links in `packages`, the `maintainers` command stores package maintainer lists in `packages`, the `health` command stores package maintenance health signals in `packages`, and the `deprecated` command uses the `versions` cache and fetches exact-version status from registries when cached deprecation metadata is missing.
 
 The `licenses --drift` check reads per-version license data from the `versions` cache and falls back to enrichment version lookups for uncached installed versions.
 
