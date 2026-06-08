@@ -30,6 +30,27 @@ Append more information later:
 $ git pkgs notes append pkg:npm/lodash@4.17.21 -m "re-reviewed Q1 2026" --set reviewer=alice
 ```
 
+Import notes from a version-controlled YAML or JSON policy file:
+
+```yaml
+# policy.yaml
+- purl: "pkg:npm/lodash"
+  message: "Approved for production use"
+  metadata:
+    status: approved
+    reviewed: "2026-01-15"
+- purl: "pkg:npm/moment"
+  message: "Deprecated, use dayjs instead"
+  metadata:
+    status: deprecated
+    alternative: "pkg:npm/dayjs"
+```
+
+```
+$ git pkgs notes import policy.yaml --namespace policy
+Imported 2 notes from policy.yaml
+```
+
 List all notes:
 
 ```
@@ -99,6 +120,7 @@ All subcommands that take a purl accept both versioned (`pkg:npm/lodash@4.17.21`
 ```
 add <purl>     Create a note (--force to overwrite)
 append <purl>  Append message text and merge metadata (creates if missing)
+import <file>  Import notes from a YAML or JSON file
 show <purl>    Display a note
 list           List all notes
 remove <purl>  Delete a note
@@ -116,6 +138,8 @@ Common flags:
 --force            Overwrite existing note (add only)
 --purl-filter=STR  Filter by purl substring (list only)
 ```
+
+For imports, `--namespace` is used as the default namespace when an entry does not set one, and `--origin` is used as the default origin. Existing notes with the same purl and namespace are updated.
 
 ## Ideas for tooling integration
 
@@ -173,10 +197,7 @@ git pkgs notes add pkg:npm/some-lib --namespace license-review \
 Mark packages as approved, deprecated, or banned for your org:
 
 ```bash
-git pkgs notes add pkg:npm/moment --namespace policy \
-  -m "Use dayjs instead" --set status=deprecated --set alternative=dayjs
-git pkgs notes add pkg:npm/event-stream --namespace policy \
-  -m "Compromised in 2018" --set status=banned
+git pkgs notes import policy.yaml --namespace policy
 ```
 
 A CI check could compare current dependencies against policy notes and fail if any banned package is present.

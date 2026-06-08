@@ -2,6 +2,7 @@ package cmd_test
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -417,6 +418,130 @@ func TestNotesAppend(t *testing.T) {
 		}
 		if !strings.Contains(stdout, "new note via append") {
 			t.Errorf("expected message in output, got: %s", stdout)
+		}
+	})
+}
+
+func TestNotesImport(t *testing.T) {
+	t.Run("imports yaml notes with default namespace", func(t *testing.T) {
+		repoDir := createTestRepo(t)
+		addFileAndCommit(t, repoDir, "package.json", packageJSON, "Add package.json")
+		cleanup := chdir(t, repoDir)
+		defer cleanup()
+
+		_, _, err := runCmd(t, "init")
+		if err != nil {
+			t.Fatalf("init failed: %v", err)
+		}
+
+		policy := `- purl: "pkg:npm/lodash"
+  message: "Approved for production use"
+  metadata:
+    status: approved
+    reviewed: "2026-01-15"
+- purl: "pkg:npm/express"
+  namespace: audit
+  message: "Needs annual review"
+  metadata:
+    status: pending
+`
+		if err := os.WriteFile("policy.yaml", []byte(policy), 0o644); err != nil {
+			t.Fatalf("write policy: %v", err)
+		}
+
+		stdout, _, err := runCmd(t, "notes", "import", "policy.yaml", "--namespace", "policy", "--origin", "policy-file")
+		if err != nil {
+			t.Fatalf("notes import failed: %v", err)
+		}
+		if !strings.Contains(stdout, "Imported 2 notes") {
+			t.Fatalf("expected import summary, got: %s", stdout)
+		}
+
+		stdout, _, err = runCmd(t, "notes", "show", "pkg:npm/lodash", "--namespace", "policy", "-f", "json")
+		if err != nil {
+			t.Fatalf("show imported note failed: %v", err)
+		}
+		var note database.Note
+		if err := json.Unmarshal([]byte(stdout), &note); err != nil {
+			t.Fatalf("parse note json: %v", err)
+		}
+		if note.Message != "Approved for production use" {
+			t.Fatalf("message = %q, want approved message", note.Message)
+		}
+		if note.Origin != "policy-file" {
+			t.Fatalf("origin = %q, want policy-file", note.Origin)
+		}
+		if note.Metadata["status"] != "approved" || note.Metadata["reviewed"] != "2026-01-15" {
+			t.Fatalf("unexpected metadata: %v", note.Metadata)
+		}
+
+		stdout, _, err = runCmd(t, "notes", "show", "pkg:npm/express", "--namespace", "audit", "-f", "json")
+		if err != nil {
+			t.Fatalf("show note with file namespace failed: %v", err)
+		}
+		if err := json.Unmarshal([]byte(stdout), &note); err != nil {
+			t.Fatalf("parse note json: %v", err)
+		}
+		if note.Namespace != "audit" {
+			t.Fatalf("namespace = %q, want audit", note.Namespace)
+		}
+	})
+
+	t.Run("imports json notes", func(t *testing.T) {
+		repoDir := createTestRepo(t)
+		addFileAndCommit(t, repoDir, "package.json", packageJSON, "Add package.json")
+		cleanup := chdir(t, repoDir)
+		defer cleanup()
+
+		_, _, err := runCmd(t, "init")
+		if err != nil {
+			t.Fatalf("init failed: %v", err)
+		}
+
+		policy := `[{"purl":"pkg:npm/lodash","namespace":"policy","message":"JSON import","metadata":{"status":"approved"}}]`
+		if err := os.WriteFile("policy.json", []byte(policy), 0o644); err != nil {
+			t.Fatalf("write policy: %v", err)
+		}
+
+		_, _, err = runCmd(t, "notes", "import", "policy.json")
+		if err != nil {
+			t.Fatalf("notes import json failed: %v", err)
+		}
+
+		stdout, _, err := runCmd(t, "notes", "show", "pkg:npm/lodash", "--namespace", "policy", "-f", "json")
+		if err != nil {
+			t.Fatalf("show json imported note failed: %v", err)
+		}
+		var note database.Note
+		if err := json.Unmarshal([]byte(stdout), &note); err != nil {
+			t.Fatalf("parse note json: %v", err)
+		}
+		if note.Message != "JSON import" {
+			t.Fatalf("message = %q, want JSON import", note.Message)
+		}
+	})
+
+	t.Run("rejects entries without purl", func(t *testing.T) {
+		repoDir := createTestRepo(t)
+		addFileAndCommit(t, repoDir, "package.json", packageJSON, "Add package.json")
+		cleanup := chdir(t, repoDir)
+		defer cleanup()
+
+		_, _, err := runCmd(t, "init")
+		if err != nil {
+			t.Fatalf("init failed: %v", err)
+		}
+
+		if err := os.WriteFile("bad-policy.yaml", []byte("- message: missing purl\n"), 0o644); err != nil {
+			t.Fatalf("write policy: %v", err)
+		}
+
+		_, _, err = runCmd(t, "notes", "import", "bad-policy.yaml")
+		if err == nil {
+			t.Fatal("expected missing purl error")
+		}
+		if !strings.Contains(err.Error(), "missing purl") {
+			t.Fatalf("expected missing purl error, got: %v", err)
 		}
 	})
 }
