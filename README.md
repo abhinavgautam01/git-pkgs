@@ -465,11 +465,12 @@ git pkgs diff --from=abc123 --to=def456   # between two commits
 git pkgs diff --from=HEAD~10              # HEAD~10 vs working tree
 git pkgs diff main..feature               # compare branches
 git pkgs diff main..feature --stat        # aggregate counts only
+git pkgs diff main..feature --by=ecosystem # compare package sets across lockfile migrations
 git pkgs diff --type=development          # only dev dependency changes
 git pkgs diff --ecosystem=npm             # filter by ecosystem
 ```
 
-With no arguments, compares HEAD against the working tree (like `git diff`). Shows added, removed, and modified packages with version info. Use `--stat` or `--summary` for one-line aggregate counts.
+With no arguments, compares HEAD against the working tree (like `git diff`). Shows added, removed, and modified packages with version info. Use `--stat` or `--summary` for one-line aggregate counts. Use `--by=ecosystem` when lockfile paths changed, such as a migration from `package-lock.json` to `pnpm-lock.yaml`, and you want to compare package names and versions rather than manifest filenames.
 
 ### Diff between files
 

@@ -28,10 +28,16 @@ Supports range syntax (main..feature) or explicit --from/--to flags.`,
 	diffCmd.Flags().StringP("ecosystem", "e", "", "Filter by ecosystem")
 	diffCmd.Flags().StringP("type", "t", "", "Filter by dependency type (runtime, development, etc.)")
 	diffCmd.Flags().StringP("format", "f", "text", "Output format: text, json")
+	diffCmd.Flags().String("by", diffByManifest, "Match dependencies by: manifest, ecosystem")
 	diffCmd.Flags().Bool("stat", false, "Show aggregate dependency change counts")
 	diffCmd.Flags().Bool("summary", false, "Show aggregate dependency change counts")
 	parent.AddCommand(diffCmd)
 }
+
+const (
+	diffByManifest  = "manifest"
+	diffByEcosystem = "ecosystem"
+)
 
 type DiffResult struct {
 	Added    []DiffEntry `json:"added,omitempty"`
@@ -64,9 +70,14 @@ func runDiff(cmd *cobra.Command, args []string) error {
 	ecosystem, _ := cmd.Flags().GetString("ecosystem")
 	depType, _ := cmd.Flags().GetString("type")
 	format, _ := cmd.Flags().GetString("format")
+	by, _ := cmd.Flags().GetString("by")
 	stat, _ := cmd.Flags().GetBool("stat")
 	summary, _ := cmd.Flags().GetBool("summary")
 	includeSubmodules, _ := cmd.Flags().GetBool("include-submodules")
+
+	if by != diffByManifest && by != diffByEcosystem {
+		return fmt.Errorf("--by must be one of: %s, %s", diffByManifest, diffByEcosystem)
+	}
 
 	// Parse range syntax if provided
 	if len(args) > 0 {
@@ -95,9 +106,9 @@ func runDiff(cmd *cobra.Command, args []string) error {
 	// When comparing to working tree, use direct parsing since there's
 	// no database state for uncommitted changes
 	if toRef == "" {
-		result, err = diffWithWorkingTree(repo, fromRef, includeSubmodules)
+		result, err = diffWithWorkingTree(repo, fromRef, includeSubmodules, by)
 	} else {
-		result, err = diffBetweenCommits(repo, fromRef, toRef)
+		result, err = diffBetweenCommits(repo, fromRef, toRef, by)
 	}
 	if err != nil {
 		return err
@@ -128,7 +139,7 @@ func runDiff(cmd *cobra.Command, args []string) error {
 }
 
 // diffBetweenCommits compares dependencies between two commits using on-demand indexing.
-func diffBetweenCommits(repo *git.Repository, fromRef, toRef string) (*DiffResult, error) {
+func diffBetweenCommits(repo *git.Repository, fromRef, toRef, by string) (*DiffResult, error) {
 	fromDeps, err := repo.GetDependencies(fromRef, "")
 	if err != nil {
 		return nil, fmt.Errorf("getting deps at %s: %w", fromRef, err)
@@ -139,11 +150,11 @@ func diffBetweenCommits(repo *git.Repository, fromRef, toRef string) (*DiffResul
 		return nil, fmt.Errorf("getting deps at %s: %w", toRef, err)
 	}
 
-	return computeDiff(fromDeps, toDeps), nil
+	return computeDiffBy(fromDeps, toDeps, by), nil
 }
 
 // diffWithWorkingTree compares dependencies between a commit and the working tree.
-func diffWithWorkingTree(repo *git.Repository, fromRef string, includeSubmodules bool) (*DiffResult, error) {
+func diffWithWorkingTree(repo *git.Repository, fromRef string, includeSubmodules bool, by string) (*DiffResult, error) {
 	fromDeps, err := repo.GetDependencies(fromRef, "")
 	if err != nil {
 		return nil, fmt.Errorf("getting deps at %s: %w", fromRef, err)
@@ -157,7 +168,7 @@ func diffWithWorkingTree(repo *git.Repository, fromRef string, includeSubmodules
 	}
 	toDeps := changesToDeps(toChanges)
 
-	return computeDiff(fromDeps, toDeps), nil
+	return computeDiffBy(fromDeps, toDeps, by), nil
 }
 
 func changesToDeps(changes []analyzer.Change) []database.Dependency {
@@ -166,8 +177,10 @@ func changesToDeps(changes []analyzer.Change) []database.Dependency {
 		deps = append(deps, database.Dependency{
 			Name:           c.Name,
 			Ecosystem:      c.Ecosystem,
+			PURL:           c.PURL,
 			Requirement:    c.Requirement,
 			ManifestPath:   c.ManifestPath,
+			ManifestKind:   c.Kind,
 			DependencyType: c.DependencyType,
 		})
 	}
@@ -175,24 +188,23 @@ func changesToDeps(changes []analyzer.Change) []database.Dependency {
 }
 
 func computeDiff(fromDeps, toDeps []database.Dependency) *DiffResult {
+	return computeDiffBy(fromDeps, toDeps, diffByManifest)
+}
+
+func computeDiffBy(fromDeps, toDeps []database.Dependency, by string) *DiffResult {
 	result := &DiffResult{}
 
-	// Build multi-maps keyed by manifest:name, since lockfiles can contain
-	// the same package at multiple versions (e.g. npm dependency hoisting).
-	type depKey struct {
-		ManifestPath string
-		Name         string
-	}
-
-	fromMulti := make(map[depKey][]database.Dependency)
+	// Build multi-maps keyed by the selected matching mode, since lockfiles
+	// can contain the same package at multiple versions (e.g. npm hoisting).
+	fromMulti := make(map[diffDepKey][]database.Dependency)
 	for _, d := range fromDeps {
-		key := depKey{d.ManifestPath, d.Name}
+		key := diffDepKeyFor(d, by)
 		fromMulti[key] = append(fromMulti[key], d)
 	}
 
-	toMulti := make(map[depKey][]database.Dependency)
+	toMulti := make(map[diffDepKey][]database.Dependency)
 	for _, d := range toDeps {
-		key := depKey{d.ManifestPath, d.Name}
+		key := diffDepKeyFor(d, by)
 		toMulti[key] = append(toMulti[key], d)
 	}
 
@@ -327,6 +339,19 @@ func computeDiff(fromDeps, toDeps []database.Dependency) *DiffResult {
 	sortDiffEntries(result.Removed)
 
 	return result
+}
+
+type diffDepKey struct {
+	ManifestPath string
+	Ecosystem    string
+	Name         string
+}
+
+func diffDepKeyFor(d database.Dependency, by string) diffDepKey {
+	if by == diffByEcosystem {
+		return diffDepKey{Ecosystem: d.Ecosystem, Name: d.Name}
+	}
+	return diffDepKey{ManifestPath: d.ManifestPath, Name: d.Name}
 }
 
 func sortDiffEntries(entries []DiffEntry) {
