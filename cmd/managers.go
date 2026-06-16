@@ -31,10 +31,94 @@ func getTranslator() (*managers.Translator, error) {
 			return
 		}
 		for _, def := range defs {
+			addReplaceManagerOverlay(def)
 			managerTranslator.Register(def)
 		}
 	})
 	return managerTranslator, managerTranslatorErr
+}
+
+func addReplaceManagerOverlay(def *definitions.Definition) {
+	if def.Commands == nil {
+		def.Commands = make(map[string]definitions.Command)
+	}
+	if _, ok := def.Commands["replace"]; ok {
+		return
+	}
+
+	switch def.Name {
+	case "gomod":
+		def.Commands["replace"] = definitions.Command{
+			Base:          []string{"mod", "edit"},
+			BaseOverrides: map[string][]string{"drop": {"mod", "edit", "-dropreplace"}},
+			Args: map[string]definitions.Arg{
+				"replacement": {Position: 0, Required: false, Flag: "-replace"},
+				"package":     {Position: 0, Required: false, Validate: "go_module"},
+			},
+			ExitCodes: map[int]string{0: "success", 1: "error"},
+		}
+		addManagerCapabilities(def, "replace_path", "replace_git", "replace_drop")
+	case ecosystemNPM:
+		def.Commands["replace"] = definitions.Command{
+			Base: []string{"install"},
+			Args: map[string]definitions.Arg{
+				"package": {Position: 0, Required: true},
+			},
+			ExitCodes: map[int]string{0: "success", 1: "error"},
+		}
+		addManagerCapabilities(def, "replace_path", "replace_git")
+	case "pnpm", "yarn", "bun":
+		def.Commands["replace"] = definitions.Command{
+			Base: []string{"add"},
+			Args: map[string]definitions.Arg{
+				"package": {Position: 0, Required: true},
+			},
+			ExitCodes: map[int]string{0: "success", 1: "error"},
+		}
+		addManagerCapabilities(def, "replace_path", "replace_git")
+	case "composer":
+		def.Commands["replace"] = definitions.Command{
+			Base:          []string{"config"},
+			BaseOverrides: map[string][]string{"drop": {"config", "--unset"}},
+			Args: map[string]definitions.Arg{
+				"repository": {Position: 0, Required: true},
+				"payload":    {Position: 1, Required: false},
+			},
+			ExitCodes: map[int]string{0: "success", 1: "error"},
+		}
+		addManagerCapabilities(def, "replace_path", "replace_git", "replace_drop")
+	}
+}
+
+func addManagerCapabilities(def *definitions.Definition, capabilities ...string) {
+	seen := make(map[string]bool, len(def.Capabilities))
+	for _, capability := range def.Capabilities {
+		seen[capability] = true
+	}
+	for _, capability := range capabilities {
+		if seen[capability] {
+			continue
+		}
+		def.Capabilities = append(def.Capabilities, capability)
+		seen[capability] = true
+	}
+}
+
+func managerSupportsCapability(managerName, capability string) (bool, error) {
+	translator, err := getTranslator()
+	if err != nil {
+		return false, err
+	}
+	def, ok := translator.Definition(managerName)
+	if !ok {
+		return false, fmt.Errorf("unknown manager: %s", managerName)
+	}
+	for _, c := range def.Capabilities {
+		if c == capability {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // lockfileMapping maps a lockfile to its package manager

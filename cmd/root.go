@@ -101,6 +101,7 @@ func NewRootCmd() *cobra.Command {
 	// Package manager commands
 	addInstallCmd(cmd)
 	addAddCmd(cmd)
+	addReplaceCmd(cmd)
 	addRemoveCmd(cmd)
 	addUpdateCmd(cmd)
 	addBrowseCmd(cmd)

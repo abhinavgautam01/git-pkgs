@@ -23,6 +23,7 @@ func TestPagerFlagAccepted(t *testing.T) {
 		"log",
 		"list",
 		"history",
+		"replace",
 	}
 
 	for _, name := range commands {
