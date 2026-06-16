@@ -109,6 +109,7 @@ func NewRootCmd() *cobra.Command {
 
 	// External plugins (git-pkgs-* on PATH)
 	addPluginCmds(cmd)
+	addJSONHelpCommand(cmd)
 
 	return cmd
 }

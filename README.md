@@ -361,6 +361,15 @@ git pkgs install -x --legacy-peer-deps      # pass extra flags
 git pkgs add lodash -x --save-exact         # npm --save-exact
 ```
 
+### Structured command metadata
+
+```bash
+git pkgs help --format json
+git pkgs help list --format json
+```
+
+Prints the command tree as JSON, including descriptions, aliases, subcommands, and flag metadata. This is useful for tools that need to discover git-pkgs commands without scraping text help output.
+
 ### Browse package source
 
 Open the source code of an installed package in your editor:
