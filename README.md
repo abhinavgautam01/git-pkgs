@@ -12,7 +12,7 @@ For best results, commit your lockfiles. Manifests show version ranges but lockf
 
 It works across many ecosystems (Gemfile, package.json, Dockerfile, GitHub Actions workflows) giving you one unified history instead of separate tools per ecosystem. The database lives in your `.git` directory where you can use it in CI to catch dependency changes in pull requests.
 
-The core commands (`list`, `history`, `blame`, `diff`, `stale`, etc.) work entirely from your git history with no network access. Additional commands fetch external data: `vulns` checks [OSV](https://osv.dev) for known CVEs, `outdated`, `freshness`, `licenses`, `funding`, `maintainers`, and `health` query [ecosyste.ms](https://packages.ecosyste.ms/) for registry metadata, `deprecated` checks registries for deprecation metadata, and `changelog` fetches upstream changelogs so you can see what changed between versions.
+The core commands (`list`, `history`, `blame`, `diff`, `stale`, etc.) work entirely from your git history with no network access. Additional commands fetch external data: `vulns` checks [OSV](https://osv.dev) for known CVEs, `outdated`, `freshness`, `licenses`, `funding`, `maintainers`, and `health` query [ecosyste.ms](https://packages.ecosyste.ms/) for registry metadata, `deprecated` checks registries for deprecation metadata, `provenance` checks registries for attestation metadata, and `changelog` fetches upstream changelogs so you can see what changed between versions.
 
 ## Installation
 
@@ -50,6 +50,7 @@ git pkgs deprecated     # find deprecated installed versions
 git pkgs funding        # show packages with funding links
 git pkgs maintainers    # show dependency maintainer counts
 git pkgs health         # score dependency maintenance health
+git pkgs provenance     # check trusted-publishing provenance
 git pkgs changelog lodash -e npm --from 4.17.20 --to 4.17.21  # view changelog
 git pkgs update         # update all dependencies
 git pkgs add lodash     # add a package
@@ -320,6 +321,17 @@ git pkgs health --format=json
 ```
 
 Scores dependency maintenance health from ecosyste.ms package metadata, including maintainer count and usage signals. Scores start at 100 and drop for missing maintainer data, a single maintainer, a small maintainer team, low dependent usage, missing usage data, and missing download data. `--threshold` controls both which dependencies are displayed and the `at_risk_dependencies` summary count. Results are sorted from lowest score to highest.
+
+### Check provenance metadata
+
+```bash
+git pkgs provenance                # show provenance status for resolved deps
+git pkgs provenance --missing      # only show deps without trusted publishing
+git pkgs provenance --ecosystem=npm
+git pkgs provenance --format=json
+```
+
+Checks exact installed versions for registry attestation metadata. Trusted-publishing attestations are reported when registries expose them; npm registry signatures are shown as a weaker integrity signal. Unsupported ecosystems and lookup errors are reported explicitly.
 
 ### View changelogs
 

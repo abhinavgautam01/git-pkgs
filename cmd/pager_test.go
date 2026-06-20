@@ -20,6 +20,7 @@ func TestPagerFlagAccepted(t *testing.T) {
 		"funding",
 		"maintainers",
 		"health",
+		"provenance",
 		"log",
 		"list",
 		"history",
