@@ -1109,7 +1109,13 @@ func (db *DB) SearchDependencies(branchID int64, pattern, ecosystem string, dire
 	query += `
 		),
 		first_added AS (
-			SELECT dc.name, dc.ecosystem, MIN(c.committed_at) as first_seen, MIN(c.sha) as added_in
+			SELECT dc.name, dc.ecosystem, MIN(c.committed_at) as first_seen,
+			       (SELECT c2.sha FROM dependency_changes dc2
+			        JOIN commits c2 ON c2.id = dc2.commit_id
+			        JOIN branch_commits bc2 ON bc2.commit_id = c2.id
+			        WHERE bc2.branch_id = ? AND dc2.change_type = 'added'
+			              AND dc2.name = dc.name AND dc2.ecosystem = dc.ecosystem
+			        ORDER BY c2.committed_at ASC LIMIT 1) as added_in
 			FROM dependency_changes dc
 			JOIN commits c ON c.id = dc.commit_id
 			JOIN branch_commits bc ON bc.commit_id = c.id
@@ -1131,7 +1137,7 @@ func (db *DB) SearchDependencies(branchID int64, pattern, ecosystem string, dire
 		LEFT JOIN last_changed lc ON lc.name = cd.name AND lc.ecosystem = cd.ecosystem
 		ORDER BY cd.name
 	`
-	args = append(args, branchID, branchID)
+	args = append(args, branchID, branchID, branchID)
 
 	rows, err := db.Query(query, args...)
 	if err != nil {
