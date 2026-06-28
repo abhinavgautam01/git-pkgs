@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/git-pkgs/git-pkgs/internal/database"
 )
@@ -603,6 +604,231 @@ func TestInsertNoteUpsert(t *testing.T) {
 	}
 	if len(notes) != 1 {
 		t.Errorf("expected 1 note, got %d", len(notes))
+	}
+}
+
+func TestSearchDependenciesCrossEcosystem(t *testing.T) {
+	// Regression test for https://github.com/git-pkgs/git-pkgs/issues/241
+	// When the same package name exists in two ecosystems (e.g. npm and pip)
+	// with different commit dates, SearchDependencies must return the correct
+	// FirstSeen and LastChanged per ecosystem — not inherit from the other.
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "pkgs.sqlite3")
+
+	db, err := database.Create(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	npmDate := time.Date(2020, 6, 15, 0, 0, 0, 0, time.UTC)
+	pipDate := time.Date(2021, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	npmManifest := database.ManifestInfo{
+		Path:      "package-lock.json",
+		Ecosystem: "npm",
+		Kind:      "lockfile",
+	}
+	pipManifest := database.ManifestInfo{
+		Path:      "Pipfile.lock",
+		Ecosystem: "pip",
+		Kind:      "lockfile",
+	}
+
+	writer := database.NewBatchWriter(db)
+	if err := writer.CreateBranch("main"); err != nil {
+		t.Fatalf("failed to create branch: %v", err)
+	}
+
+	// First commit: add "requests" in npm ecosystem
+	npmCommit := database.CommitInfo{
+		SHA:         "aaa111",
+		Message:     "add npm requests",
+		CommittedAt: npmDate,
+	}
+	writer.AddCommit(npmCommit, true)
+	writer.IncrementDepCommitCount()
+	writer.AddChange("aaa111", npmManifest, database.ChangeInfo{
+		Name:       "requests",
+		Ecosystem:  "npm",
+		ChangeType: "added",
+	})
+	writer.AddSnapshot("aaa111", npmManifest, database.SnapshotInfo{
+		ManifestPath: "package-lock.json",
+		Name:         "requests",
+		Ecosystem:    "npm",
+		Requirement:  "1.0.0",
+	})
+
+	// Second commit: add "requests" in pip ecosystem (different date)
+	// The npm dep is still present, so it appears in this snapshot too.
+	pipCommit := database.CommitInfo{
+		SHA:         "bbb222",
+		Message:     "add pip requests",
+		CommittedAt: pipDate,
+	}
+	writer.AddCommit(pipCommit, true)
+	writer.IncrementDepCommitCount()
+	writer.AddChange("bbb222", pipManifest, database.ChangeInfo{
+		Name:       "requests",
+		Ecosystem:  "pip",
+		ChangeType: "added",
+	})
+	writer.AddSnapshot("bbb222", pipManifest, database.SnapshotInfo{
+		ManifestPath: "Pipfile.lock",
+		Name:         "requests",
+		Ecosystem:    "pip",
+		Requirement:  "2.31.0",
+	})
+	// npm's "requests" is still in the project at this commit
+	writer.AddSnapshot("bbb222", npmManifest, database.SnapshotInfo{
+		ManifestPath: "package-lock.json",
+		Name:         "requests",
+		Ecosystem:    "npm",
+		Requirement:  "1.0.0",
+	})
+
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("failed to flush: %v", err)
+	}
+
+	// Look up the branchID for SearchDependencies
+	branch, err := db.GetOrCreateBranch("main")
+	if err != nil {
+		t.Fatalf("failed to get branch: %v", err)
+	}
+
+	results, err := db.SearchDependencies(branch.ID, "requests", "", false)
+	if err != nil {
+		t.Fatalf("SearchDependencies failed: %v", err)
+	}
+
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results (npm + pip), got %d", len(results))
+	}
+
+	npmExpected := npmDate.UTC().Format("2006-01-02 15:04:05")
+	pipExpected := pipDate.UTC().Format("2006-01-02 15:04:05")
+
+	for _, r := range results {
+		switch r.Ecosystem {
+		case "npm":
+			if r.FirstSeen != npmExpected {
+				t.Errorf("npm FirstSeen: got %q, want %q", r.FirstSeen, npmExpected)
+			}
+			if r.LastChanged != npmExpected {
+				t.Errorf("npm LastChanged: got %q, want %q", r.LastChanged, npmExpected)
+			}
+			if r.AddedIn != "aaa111" {
+				t.Errorf("npm AddedIn: got %q, want %q", r.AddedIn, "aaa111")
+			}
+		case "pip":
+			if r.FirstSeen != pipExpected {
+				t.Errorf("pip FirstSeen: got %q, want %q", r.FirstSeen, pipExpected)
+			}
+			if r.LastChanged != pipExpected {
+				t.Errorf("pip LastChanged: got %q, want %q", r.LastChanged, pipExpected)
+			}
+			if r.AddedIn != "bbb222" {
+				t.Errorf("pip AddedIn: got %q, want %q", r.AddedIn, "bbb222")
+			}
+		default:
+			t.Errorf("unexpected ecosystem: %s", r.Ecosystem)
+		}
+	}
+}
+
+func TestSearchDependenciesAddedInSHA(t *testing.T) {
+	// Regression test: added_in must return the SHA of the chronologically
+	// earliest commit, not the lexicographically smallest SHA.
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "pkgs.sqlite3")
+
+	db, err := database.Create(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	earlyDate := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	lateDate := time.Date(2023, 6, 1, 0, 0, 0, 0, time.UTC)
+
+	manifest := database.ManifestInfo{
+		Path:      "package-lock.json",
+		Ecosystem: "npm",
+		Kind:      "lockfile",
+	}
+
+	writer := database.NewBatchWriter(db)
+	if err := writer.CreateBranch("main"); err != nil {
+		t.Fatalf("failed to create branch: %v", err)
+	}
+
+	// First chronological commit: SHA "zzz999" (lex-large but earliest)
+	writer.AddCommit(database.CommitInfo{
+		SHA:         "zzz999",
+		Message:     "first add",
+		CommittedAt: earlyDate,
+	}, true)
+	writer.IncrementDepCommitCount()
+	writer.AddChange("zzz999", manifest, database.ChangeInfo{
+		Name:       "lodash",
+		Ecosystem:  "npm",
+		ChangeType: "added",
+	})
+	writer.AddSnapshot("zzz999", manifest, database.SnapshotInfo{
+		ManifestPath: "package-lock.json",
+		Name:         "lodash",
+		Ecosystem:    "npm",
+		Requirement:  "4.17.0",
+	})
+
+	// Second chronological commit: SHA "aaa000" (lex-small, removed then re-added)
+	writer.AddCommit(database.CommitInfo{
+		SHA:         "aaa000",
+		Message:     "re-add lodash",
+		CommittedAt: lateDate,
+	}, true)
+	writer.IncrementDepCommitCount()
+	writer.AddChange("aaa000", manifest, database.ChangeInfo{
+		Name:       "lodash",
+		Ecosystem:  "npm",
+		ChangeType: "added",
+	})
+	writer.AddSnapshot("aaa000", manifest, database.SnapshotInfo{
+		ManifestPath: "package-lock.json",
+		Name:         "lodash",
+		Ecosystem:    "npm",
+		Requirement:  "4.17.21",
+	})
+
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("failed to flush: %v", err)
+	}
+
+	branch, err := db.GetOrCreateBranch("main")
+	if err != nil {
+		t.Fatalf("failed to get branch: %v", err)
+	}
+
+	results, err := db.SearchDependencies(branch.ID, "lodash", "", false)
+	if err != nil {
+		t.Fatalf("SearchDependencies failed: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+
+	// added_in should be the earliest commit SHA "zzz999", NOT "aaa000"
+	if results[0].AddedIn != "zzz999" {
+		t.Errorf("AddedIn: got %q, want %q (should be earliest commit, not lex-smallest SHA)",
+			results[0].AddedIn, "zzz999")
+	}
+
+	expectedFirst := earlyDate.UTC().Format("2006-01-02 15:04:05")
+	if results[0].FirstSeen != expectedFirst {
+		t.Errorf("FirstSeen: got %q, want %q", results[0].FirstSeen, expectedFirst)
 	}
 }
 
