@@ -1120,6 +1120,7 @@ func (db *DB) SearchDependencies(branchID int64, pattern, ecosystem string, dire
 
 	query += `
 		),
+		-- Note: c.sha alongside MIN(c.committed_at) relies on SQLite's bare-column-in-aggregate guarantee
 		first_added AS (
 			SELECT dc.name, dc.ecosystem, MIN(c.committed_at) as first_seen, c.sha as added_in
 			FROM dependency_changes dc
