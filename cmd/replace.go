@@ -4,10 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -16,8 +14,6 @@ import (
 )
 
 const defaultReplaceTimeout = 5 * time.Minute
-
-var regexpGoModuleVersion = regexp.MustCompile(`^v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$`)
 
 type replaceMode string
 
@@ -120,7 +116,9 @@ func runReplace(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	opts.Manager = mgr.Name
-	if err := validateReplaceManagerOptions(opts); err != nil {
+
+	manager, err := createManager(dir, opts.Manager)
+	if err != nil {
 		return err
 	}
 
@@ -132,7 +130,7 @@ func runReplace(cmd *cobra.Command, args []string) error {
 		_, _ = fmt.Fprintln(cmd.OutOrStdout())
 	}
 
-	return executeReplace(cmd, dir, opts)
+	return executeReplace(cmd, dir, manager, opts)
 }
 
 func validateReplaceOptions(opts *replaceOptions) error {
@@ -167,41 +165,6 @@ func validateReplaceOptions(opts *replaceOptions) error {
 	return nil
 }
 
-func validateReplaceManagerOptions(opts replaceOptions) error {
-	if opts.Manager == "gomod" && opts.Mode == replaceModeGit && opts.Ref != "" && !isGoModuleVersion(opts.Ref) {
-		return fmt.Errorf("gomod --ref must be a Go module version or pseudo-version, got %q", opts.Ref)
-	}
-	if editsCargoManifest(opts.Manager) || editsUVManifest(opts.Manager) || opts.Manager == "bundler" || opts.Mode == replaceModeVersion {
-		return nil
-	}
-
-	capability := replaceCapabilityForMode(opts.Mode)
-	if capability == "" {
-		return nil
-	}
-	supported, err := managerSupportsCapability(opts.Manager, capability)
-	if err != nil {
-		return err
-	}
-	if !supported {
-		return fmt.Errorf("%s does not support %s replacements", opts.Manager, opts.Mode)
-	}
-	return nil
-}
-
-func replaceCapabilityForMode(mode replaceMode) string {
-	switch mode {
-	case replaceModePath:
-		return "replace_path"
-	case replaceModeGit:
-		return "replace_git"
-	case replaceModeDrop:
-		return "replace_drop"
-	default:
-		return ""
-	}
-}
-
 func selectManagerForReplace(dir, managerOverride, ecosystem string, cmd *cobra.Command) (*DetectedManager, error) {
 	if managerOverride != "" {
 		return &DetectedManager{Name: managerOverride}, nil
@@ -223,12 +186,12 @@ func selectManagerForReplace(dir, managerOverride, ecosystem string, cmd *cobra.
 	return mgr, nil
 }
 
-func executeReplace(cmd *cobra.Command, dir string, opts replaceOptions) error {
+func executeReplace(cmd *cobra.Command, dir string, mgr managers.Manager, opts replaceOptions) error {
 	switch opts.Mode {
 	case replaceModeVersion:
 		return executeReplaceVersion(cmd, dir, opts)
 	case replaceModePath, replaceModeGit, replaceModeDrop:
-		return executeReplaceSource(cmd, dir, opts)
+		return executeReplaceSource(cmd, dir, mgr, opts)
 	default:
 		return fmt.Errorf("unsupported replacement mode %q", opts.Mode)
 	}
@@ -250,22 +213,19 @@ func executeReplaceVersion(cmd *cobra.Command, dir string, opts replaceOptions) 
 	return executeReplaceManagerOperations(cmd, dir, opts, []replaceManagerOperation{op})
 }
 
-func executeReplaceSource(cmd *cobra.Command, dir string, opts replaceOptions) error {
-	if editsCargoManifest(opts.Manager) {
-		return replaceInCargoManifest(cmd, filepath.Join(dir, "Cargo.toml"), opts)
-	}
-	if editsUVManifest(opts.Manager) {
-		return replaceInUVManifest(cmd, filepath.Join(dir, "pyproject.toml"), opts)
-	}
-	if opts.Manager == "bundler" {
-		return replaceInGemfile(cmd, filepath.Join(dir, "Gemfile"), opts)
+func executeReplaceSource(cmd *cobra.Command, dir string, mgr managers.Manager, opts replaceOptions) error {
+	if opts.DryRun {
+		return dryRunReplaceSource(cmd, dir, opts)
 	}
 
-	ops, err := buildReplaceManagerOperations(opts)
+	ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
+	defer cancel()
+
+	result, err := mgr.Replace(ctx, opts.Package, managerReplaceOptions(opts))
 	if err != nil {
-		return err
+		return fmt.Errorf("replace failed: %w", err)
 	}
-	return executeReplaceManagerOperations(cmd, dir, opts, ops)
+	return outputReplaceResult(cmd, result)
 }
 
 func executeReplaceManagerOperations(
@@ -305,147 +265,72 @@ func executeReplaceManagerOperations(
 	return nil
 }
 
-func buildReplaceManagerOperations(opts replaceOptions) ([]replaceManagerOperation, error) {
-	input := managers.CommandInput{
-		Args:  map[string]string{},
-		Flags: map[string]any{},
+func dryRunReplaceSource(cmd *cobra.Command, dir string, opts replaceOptions) error {
+	if manifestPath := replaceManifestPath(dir, opts.Manager); manifestPath != "" {
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Would edit: %s\n", manifestPath)
+		return nil
+	}
+
+	mockRunner := managers.NewMockRunner()
+	mgr, err := createManagerWithRunner(dir, opts.Manager, mockRunner)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
+	defer cancel()
+	if _, err := mgr.Replace(ctx, opts.Package, managerReplaceOptions(opts)); err != nil {
+		return fmt.Errorf("building replace command: %w", err)
+	}
+	for _, c := range mockRunner.Captured {
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Would run: %v\n", c)
+	}
+	return nil
+}
+
+func outputReplaceResult(cmd *cobra.Command, result *managers.Result) error {
+	if result == nil {
+		return nil
+	}
+	if result.Stdout != "" {
+		_, _ = fmt.Fprint(cmd.OutOrStdout(), result.Stdout)
+		if !strings.HasSuffix(result.Stdout, "\n") {
+			_, _ = fmt.Fprintln(cmd.OutOrStdout())
+		}
+	}
+	if result.Stderr != "" {
+		_, _ = fmt.Fprint(cmd.ErrOrStderr(), result.Stderr)
+		if !strings.HasSuffix(result.Stderr, "\n") {
+			_, _ = fmt.Fprintln(cmd.ErrOrStderr())
+		}
+	}
+	if result.ExitCode != 0 {
+		return fmt.Errorf("replace failed with exit code %d: %s", result.ExitCode, strings.TrimSpace(result.Stderr))
+	}
+	return nil
+}
+
+func managerReplaceOptions(opts replaceOptions) managers.ReplaceOptions {
+	return managers.ReplaceOptions{
+		Path:  opts.Path,
+		Git:   opts.Git,
+		Ref:   opts.Ref,
+		Drop:  opts.Mode == replaceModeDrop,
 		Extra: opts.Extra,
 	}
+}
 
-	switch opts.Manager {
-	case "gomod":
-		if err := populateGoReplaceInput(opts, &input); err != nil {
-			return nil, err
-		}
-	case ecosystemNPM, "pnpm", "yarn", "bun":
-		if err := populateNPMReplaceInput(opts, &input); err != nil {
-			return nil, err
-		}
-	case "composer":
-		return buildComposerReplaceOperations(opts, input)
+func replaceManifestPath(dir, managerName string) string {
+	switch managerName {
+	case "cargo":
+		return filepath.Join(dir, "Cargo.toml")
+	case "uv":
+		return filepath.Join(dir, "pyproject.toml")
+	case "bundler":
+		return filepath.Join(dir, "Gemfile")
 	default:
-		return nil, fmt.Errorf("%s does not support replace for %s", opts.Manager, opts.Mode)
+		return ""
 	}
-
-	return []replaceManagerOperation{{Operation: "replace", Input: input}}, nil
-}
-
-func populateGoReplaceInput(opts replaceOptions, input *managers.CommandInput) error {
-	switch opts.Mode {
-	case replaceModePath:
-		input.Args["replacement"] = opts.Package + "=" + opts.Path
-	case replaceModeGit:
-		target, err := normalizeGoReplaceTarget(opts.Git)
-		if err != nil {
-			return err
-		}
-		if opts.Ref != "" {
-			target += "@" + opts.Ref
-		}
-		input.Args["replacement"] = opts.Package + "=" + target
-	case replaceModeDrop:
-		input.Args["package"] = opts.Package
-		input.Flags["drop"] = true
-	default:
-		return fmt.Errorf("gomod does not support replace for %s", opts.Mode)
-	}
-	return nil
-}
-
-func populateNPMReplaceInput(opts replaceOptions, input *managers.CommandInput) error {
-	switch opts.Mode {
-	case replaceModePath:
-		input.Args["package"] = opts.Package + "@file:" + opts.Path
-	case replaceModeGit:
-		input.Args["package"] = opts.Package + "@" + npmGitSpec(opts.Git, opts.Ref)
-	case replaceModeDrop:
-		return fmt.Errorf("%s cannot safely drop a file/git replacement without the original version; use 'git-pkgs replace %s <version>' to restore a registry version", opts.Manager, opts.Package)
-	default:
-		return fmt.Errorf("%s does not support replace for %s", opts.Manager, opts.Mode)
-	}
-	return nil
-}
-
-func buildComposerReplaceOperations(
-	opts replaceOptions,
-	input managers.CommandInput,
-) ([]replaceManagerOperation, error) {
-	repoName := composerRepositoryName(opts.Package)
-	input.Args["repository"] = "repositories." + repoName
-	switch opts.Mode {
-	case replaceModePath:
-		input.Args["payload"] = fmt.Sprintf(`{"type":"path","url":%s}`, quoteJSONString(opts.Path))
-	case replaceModeGit:
-		input.Args["payload"] = fmt.Sprintf(`{"type":"vcs","url":%s}`, quoteJSONString(opts.Git))
-		ops := []replaceManagerOperation{{Operation: "replace", Input: input}}
-		if opts.Ref != "" {
-			requireInput := managers.CommandInput{
-				Args:  map[string]string{"package": opts.Package + ":dev-" + opts.Ref},
-				Flags: map[string]any{},
-				Extra: opts.Extra,
-			}
-			ops[0].Input.Extra = nil
-			ops = append(ops, replaceManagerOperation{Operation: "add", Input: requireInput})
-		}
-		return ops, nil
-	case replaceModeDrop:
-		input.Flags["drop"] = true
-	default:
-		return nil, fmt.Errorf("composer does not support replace for %s", opts.Mode)
-	}
-	return []replaceManagerOperation{{Operation: "replace", Input: input}}, nil
-}
-
-func npmGitSpec(repo, ref string) string {
-	spec := repo
-	if strings.HasPrefix(spec, "http://") || strings.HasPrefix(spec, "https://") {
-		spec = "git+" + spec
-	}
-	if ref != "" {
-		spec += "#" + ref
-	}
-	return spec
-}
-
-func normalizeGoReplaceTarget(target string) (string, error) {
-	target = strings.TrimSpace(target)
-	if target == "" {
-		return "", errors.New("go replacement target cannot be empty")
-	}
-
-	if strings.HasPrefix(target, "git@") {
-		withoutPrefix := strings.TrimPrefix(target, "git@")
-		host, path, ok := strings.Cut(withoutPrefix, ":")
-		if !ok || host == "" || path == "" {
-			return "", fmt.Errorf("invalid go replacement git target %q", target)
-		}
-		return strings.TrimSuffix(host+"/"+strings.Trim(path, "/"), ".git"), nil
-	}
-
-	if strings.Contains(target, "://") {
-		parsed, err := url.Parse(target)
-		if err != nil || parsed.Host == "" || parsed.Path == "" {
-			return "", fmt.Errorf("invalid go replacement git target %q", target)
-		}
-		if parsed.Scheme != "https" && parsed.Scheme != "http" && parsed.Scheme != "ssh" && parsed.Scheme != "git" {
-			return "", fmt.Errorf("unsupported go replacement git URL scheme %q", parsed.Scheme)
-		}
-		return strings.TrimSuffix(parsed.Host+"/"+strings.Trim(parsed.Path, "/"), ".git"), nil
-	}
-
-	if strings.HasPrefix(target, "git+") {
-		return "", fmt.Errorf("unsupported go replacement git target %q; use a module path or URL", target)
-	}
-	return strings.TrimSuffix(target, ".git"), nil
-}
-
-func isGoModuleVersion(ref string) bool {
-	return regexpGoModuleVersion.MatchString(ref)
-}
-
-func composerRepositoryName(pkg string) string {
-	replacer := strings.NewReplacer("/", "-", "_", "-", ".", "-")
-	return "git-pkgs-" + replacer.Replace(pkg)
 }
 
 func flagString(cmd *cobra.Command, name string) string {

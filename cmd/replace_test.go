@@ -133,31 +133,39 @@ func TestReplaceValidation(t *testing.T) {
 	}
 }
 
-func TestGoReplaceGitTargetNormalizesURLs(t *testing.T) {
-	ops, err := buildReplaceManagerOperations(replaceOptions{
-		Package: "example.test/lib",
-		Git:     "https://github.com/fork/lib.git",
-		Ref:     "v1.2.3",
-		Mode:    replaceModeGit,
-		Manager: "gomod",
-	})
-	if err != nil {
-		t.Fatalf("build go replace operations: %v", err)
+func TestReplaceGoDryRunUsesManagerReplaceBuilder(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte("module example.test/app\n\ngo 1.22\n"), 0644); err != nil {
+		t.Fatal(err)
 	}
-	want := "example.test/lib=github.com/fork/lib@v1.2.3"
-	if len(ops) != 1 || ops[0].Input.Args["replacement"] != want {
-		t.Fatalf("operations = %#v, want replacement %q", ops, want)
+	cleanup := chdirReplaceTest(t, tmpDir)
+	defer cleanup()
+
+	var stdout bytes.Buffer
+	root := NewRootCmd()
+	root.SetArgs([]string{"replace", "example.test/lib", "--git", "https://github.com/fork/lib.git", "--ref", "v1.2.3", "-m", "gomod", "--dry-run"})
+	root.SetOut(&stdout)
+	if err := root.Execute(); err != nil {
+		t.Fatalf("replace go dry-run: %v", err)
+	}
+
+	want := "Would run: [go mod edit -replace example.test/lib=github.com/fork/lib@v1.2.3]"
+	if !strings.Contains(stdout.String(), want) {
+		t.Fatalf("output = %q, want containing %q", stdout.String(), want)
 	}
 }
 
 func TestGoReplaceGitRefRequiresVersion(t *testing.T) {
-	err := validateReplaceManagerOptions(replaceOptions{
-		Package: "example.test/lib",
-		Git:     "https://github.com/fork/lib.git",
-		Ref:     "feature-branch",
-		Mode:    replaceModeGit,
-		Manager: "gomod",
-	})
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte("module example.test/app\n\ngo 1.22\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cleanup := chdirReplaceTest(t, tmpDir)
+	defer cleanup()
+
+	root := NewRootCmd()
+	root.SetArgs([]string{"replace", "example.test/lib", "--git", "https://github.com/fork/lib.git", "--ref", "feature-branch", "-m", "gomod", "--dry-run"})
+	err := root.Execute()
 	if err == nil || !strings.Contains(err.Error(), "must be a Go module version") {
 		t.Fatalf("error = %v, want Go module version error", err)
 	}
@@ -198,10 +206,21 @@ func TestReplaceCargoManifest(t *testing.T) {
 }
 
 func TestReplaceCargoManifestUsesBranchForNamedRef(t *testing.T) {
-	content, err := updateTOMLSectionEntry("[patch.crates-io] # local overrides\n", "[patch.crates-io]", "serde", `{ git = "https://github.com/fork/serde", branch = "main" }`, false)
-	if err != nil {
+	tmpDir := t.TempDir()
+	manifest := filepath.Join(tmpDir, "Cargo.toml")
+	if err := os.WriteFile(manifest, []byte("[package]\nname = \"app\"\n\n[patch.crates-io] # local overrides\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
+	cleanup := chdirReplaceTest(t, tmpDir)
+	defer cleanup()
+
+	root := NewRootCmd()
+	root.SetArgs([]string{"replace", "serde", "--git", "https://github.com/fork/serde", "--ref", "main", "-m", "cargo"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("replace cargo git: %v", err)
+	}
+
+	content := readReplaceTestFile(t, manifest)
 	if !strings.Contains(content, `[patch.crates-io] # local overrides`) {
 		t.Fatalf("Cargo.toml did not preserve commented header:\n%s", content)
 	}
@@ -211,18 +230,31 @@ func TestReplaceCargoManifestUsesBranchForNamedRef(t *testing.T) {
 }
 
 func TestReplaceUVManifest(t *testing.T) {
-	content, err := updateTOMLSectionEntry("[project]\nname = \"app\"\n", "[tool.uv.sources]", "demo-pkg", `{ path = "../demo", editable = true }`, false)
-	if err != nil {
+	tmpDir := t.TempDir()
+	manifest := filepath.Join(tmpDir, "pyproject.toml")
+	if err := os.WriteFile(manifest, []byte("[project]\nname = \"app\"\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(content, "[tool.uv.sources]\ndemo-pkg = { path = \"../demo\", editable = true }\n") {
+	cleanup := chdirReplaceTest(t, tmpDir)
+	defer cleanup()
+
+	root := NewRootCmd()
+	root.SetArgs([]string{"replace", "demo-pkg", "--path", "../demo", "-m", "uv"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("replace uv path: %v", err)
+	}
+
+	content := readReplaceTestFile(t, manifest)
+	if !strings.Contains(content, "[tool.uv.sources]\ndemo-pkg = { path = \"../demo\" }\n") {
 		t.Fatalf("pyproject content missing uv source:\n%s", content)
 	}
 
-	content, err = updateTOMLSectionEntry(content, "[tool.uv.sources]", "demo-pkg", "", true)
-	if err != nil {
-		t.Fatal(err)
+	root = NewRootCmd()
+	root.SetArgs([]string{"replace", "demo-pkg", "--drop", "-m", "uv"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("replace uv drop: %v", err)
 	}
+	content = readReplaceTestFile(t, manifest)
 	if strings.Contains(content, "demo-pkg =") {
 		t.Fatalf("pyproject content still contains uv source:\n%s", content)
 	}
@@ -270,56 +302,75 @@ func TestReplaceGemfile(t *testing.T) {
 }
 
 func TestReplaceGemfileFiltersShorthandAndHashRocketSources(t *testing.T) {
-	line := `gem "rails", "~> 7.0", github: "rails/rails", :branch => "main", require: false` + "\n"
-	got, err := updateGemfileLine(line, replaceOptions{
-		Package: "rails",
-		Git:     "https://github.com/fork/rails",
-		Ref:     "feature",
-		Mode:    replaceModeGit,
-	})
-	if err != nil {
+	tmpDir := t.TempDir()
+	gemfile := filepath.Join(tmpDir, "Gemfile")
+	line := `source "https://rubygems.org"` + "\n" + `gem "rails", "~> 7.0", github: "rails/rails", :branch => "main", require: false` + "\n"
+	if err := os.WriteFile(gemfile, []byte(line), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(got, "github:") || strings.Contains(got, ":branch =>") {
-		t.Fatalf("Gemfile replacement retained old source args: %s", got)
+	cleanup := chdirReplaceTest(t, tmpDir)
+	defer cleanup()
+
+	root := NewRootCmd()
+	root.SetArgs([]string{"replace", "rails", "--git", "https://github.com/fork/rails", "--ref", "feature", "-m", "bundler"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("replace gem: %v", err)
+	}
+
+	content := readReplaceTestFile(t, gemfile)
+	if strings.Contains(content, "github:") || strings.Contains(content, ":branch =>") {
+		t.Fatalf("Gemfile replacement retained old source args: %s", content)
 	}
 	want := `gem "rails", "~> 7.0", require: false, git: "https://github.com/fork/rails", branch: "feature"`
-	if !strings.Contains(got, want) {
-		t.Fatalf("Gemfile line = %q, want containing %q", got, want)
+	if !strings.Contains(content, want) {
+		t.Fatalf("Gemfile content = %q, want containing %q", content, want)
 	}
 }
 
 func TestNPMDropReplacementRequiresVersion(t *testing.T) {
-	_, err := buildReplaceManagerOperations(replaceOptions{
-		Package: "lodash",
-		Mode:    replaceModeDrop,
-		Manager: "npm",
-	})
-	if err == nil || !strings.Contains(err.Error(), "cannot safely drop") {
-		t.Fatalf("error = %v, want cannot safely drop", err)
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "package.json"), []byte(`{"dependencies":{"lodash":"file:../lodash"}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "package-lock.json"), []byte(`{}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cleanup := chdirReplaceTest(t, tmpDir)
+	defer cleanup()
+
+	root := NewRootCmd()
+	root.SetArgs([]string{"replace", "lodash", "--drop", "-m", "npm", "--dry-run"})
+	err := root.Execute()
+	if err == nil || !strings.Contains(err.Error(), "operation not supported") {
+		t.Fatalf("error = %v, want unsupported operation", err)
 	}
 }
 
 func TestComposerGitRefExtrasOnlyApplyToRequire(t *testing.T) {
-	ops, err := buildReplaceManagerOperations(replaceOptions{
-		Package: "vendor/pkg",
-		Git:     "https://github.com/fork/pkg",
-		Ref:     "feature",
-		Mode:    replaceModeGit,
-		Manager: "composer",
-		Extra:   []string{"--no-update"},
-	})
-	if err != nil {
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "composer.json"), []byte(`{"require":{"vendor/pkg":"^1.0"}}`), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if len(ops) != 2 {
-		t.Fatalf("operations length = %d, want 2", len(ops))
+	cleanup := chdirReplaceTest(t, tmpDir)
+	defer cleanup()
+
+	var stdout bytes.Buffer
+	root := NewRootCmd()
+	root.SetArgs([]string{"replace", "vendor/pkg", "--git", "https://github.com/fork/pkg", "--ref", "feature", "-m", "composer", "--dry-run", "-x", "--no-update"})
+	root.SetOut(&stdout)
+	if err := root.Execute(); err != nil {
+		t.Fatalf("replace composer dry-run: %v", err)
 	}
-	if len(ops[0].Input.Extra) != 0 {
-		t.Fatalf("config operation extra = %#v, want none", ops[0].Input.Extra)
+
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if len(lines) < 3 {
+		t.Fatalf("output lines = %#v, want detected line plus two dry-run commands", lines)
 	}
-	if got := ops[1].Input.Extra; len(got) != 1 || got[0] != "--no-update" {
-		t.Fatalf("require operation extra = %#v, want --no-update", got)
+	if strings.Contains(lines[1], "--no-update") {
+		t.Fatalf("config command got extra args: %s", lines[1])
+	}
+	if !strings.Contains(lines[2], "--no-update") {
+		t.Fatalf("require command missing extra args: %s", lines[2])
 	}
 }
 

@@ -139,6 +139,10 @@ func runBrowse(cmd *cobra.Command, args []string) error {
 }
 
 func createManager(dir, managerName string) (managers.Manager, error) {
+	return createManagerWithRunner(dir, managerName, managers.NewExecRunner())
+}
+
+func createManagerWithRunner(dir, managerName string, runner managers.Runner) (managers.Manager, error) {
 	translator, err := getTranslator()
 	if err != nil {
 		return nil, err
@@ -149,7 +153,7 @@ func createManager(dir, managerName string) (managers.Manager, error) {
 		return nil, fmt.Errorf("loading definitions: %w", err)
 	}
 
-	detector := managers.NewDetector(translator, managers.NewExecRunner())
+	detector := managers.NewDetector(translator, runner)
 	for _, def := range defs {
 		detector.Register(def)
 	}
