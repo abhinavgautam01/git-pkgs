@@ -53,6 +53,7 @@ git pkgs health         # score dependency maintenance health
 git pkgs changelog lodash -e npm --from 4.17.20 --to 4.17.21  # view changelog
 git pkgs update         # update all dependencies
 git pkgs add lodash     # add a package
+git pkgs replace lodash --path ../lodash  # test against a local checkout
 git pkgs why pkg:npm/lodash  # use a PURL instead of -e flag
 ```
 
@@ -341,6 +342,10 @@ git pkgs add lodash           # add a package
 git pkgs add rails --dev      # add as dev dependency
 git pkgs add lodash 4.17.21   # add specific version
 git pkgs add pkg:npm/lodash@4.17.21  # same thing, using a PURL
+git pkgs replace lodash --path ../lodash  # test against a local checkout
+git pkgs replace lodash --git https://github.com/fork/lodash --ref fix-branch
+git pkgs replace lodash 4.17.21   # restore a registry version via add
+git pkgs replace lodash --drop    # remove supported replacement entries
 git pkgs remove lodash        # remove a package
 git pkgs remove pkg:npm/lodash       # remove using a PURL
 git pkgs update               # update all dependencies
@@ -350,6 +355,8 @@ git pkgs resolve              # print dependency graph
 ```
 
 The `resolve` command runs the package manager's dependency graph command, parses the output into a normalized JSON structure with [PURLs](https://github.com/package-url/purl-spec), and prints the result. Use `--raw` to get the unparsed manager output instead.
+
+The `replace` command redirects a dependency to a local checkout or git ref for downstream testing. Go, Cargo, uv, Bundler, Composer, and npm-family managers are supported where the ecosystem has a safe replacement mechanism. For Go modules, `--ref` must be a Go module version or pseudo-version because `go.mod` replace directives do not accept branch names. npm-family `--drop` is intentionally rejected because the original registry constraint is not recoverable; use `git pkgs replace <package> <version>` to restore a registry dependency.
 
 Supports 35 package managers including npm, pnpm, yarn, bun, deno, bundler, gem, cargo, go, pip, uv, poetry, conda, composer, mix, rebar3, pub, cocoapods, swift, nuget, maven, gradle, sbt, cabal, stack, opam, luarocks, nimble, shards, cpanm, lein, vcpkg, conan, helm, and brew. The package manager is detected from lockfiles in the current directory.
 
