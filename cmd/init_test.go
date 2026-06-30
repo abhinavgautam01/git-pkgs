@@ -211,6 +211,47 @@ func TestInitCommand(t *testing.T) {
 		}
 	})
 
+	t.Run("respects ignored ecosystem config", func(t *testing.T) {
+		repoDir := createTestRepo(t)
+		addFileAndCommit(t, repoDir, "package.json", packageJSON, "Add package.json")
+		addFileAndCommit(t, repoDir, "Gemfile", "source \"https://rubygems.org\"\ngem \"rails\", \"~> 7.0\"\n", "Add Gemfile")
+
+		gitCmd := exec.Command("git", "config", "--add", "pkgs.ignoredEcosystems", "npm")
+		gitCmd.Dir = repoDir
+		if err := gitCmd.Run(); err != nil {
+			t.Fatalf("failed to configure ignored ecosystem: %v", err)
+		}
+
+		cleanup := chdir(t, repoDir)
+		defer cleanup()
+
+		if _, _, err := runCmd(t, "init", "--no-hooks"); err != nil {
+			t.Fatalf("init failed: %v", err)
+		}
+
+		db, err := database.Open(filepath.Join(repoDir, ".git", "pkgs.sqlite3"))
+		if err != nil {
+			t.Fatalf("failed to open db: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		var npmCount int
+		if err := db.QueryRow("SELECT COUNT(*) FROM dependency_snapshots WHERE ecosystem = 'npm'").Scan(&npmCount); err != nil {
+			t.Fatalf("failed to count npm snapshots: %v", err)
+		}
+		if npmCount != 0 {
+			t.Fatalf("expected no npm snapshots, got %d", npmCount)
+		}
+
+		var rubygemsCount int
+		if err := db.QueryRow("SELECT COUNT(*) FROM dependency_snapshots WHERE ecosystem = 'gem'").Scan(&rubygemsCount); err != nil {
+			t.Fatalf("failed to count gem snapshots: %v", err)
+		}
+		if rubygemsCount == 0 {
+			t.Fatal("expected gem snapshots to remain indexed")
+		}
+	})
+
 	t.Run("fails outside git repo", func(t *testing.T) {
 		tmpDir := t.TempDir()
 

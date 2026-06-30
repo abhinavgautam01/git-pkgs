@@ -124,3 +124,16 @@ func filterByEcosystem(deps []database.Dependency, ecosystem string) []database.
 	}
 	return filtered
 }
+
+func filterDependenciesByConfig(deps []database.Dependency, allows func(string) bool) []database.Dependency {
+	if len(deps) == 0 {
+		return deps
+	}
+	filtered := make([]database.Dependency, 0, len(deps))
+	for _, d := range deps {
+		if allows(d.Ecosystem) {
+			filtered = append(filtered, d)
+		}
+	}
+	return filtered
+}

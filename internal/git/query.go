@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/git-pkgs/git-pkgs/internal/analyzer"
+	"github.com/git-pkgs/git-pkgs/internal/config"
 	"github.com/git-pkgs/git-pkgs/internal/database"
 )
 
@@ -31,6 +32,10 @@ func (r *Repository) GetDependenciesWithDB(commitRef, branchName string) ([]data
 		return nil, nil, fmt.Errorf("resolving %q: %w", commitRef, err)
 	}
 	sha := hash.String()
+	filter, err := r.EcosystemFilter()
+	if err != nil {
+		return nil, nil, fmt.Errorf("loading ecosystem config: %w", err)
+	}
 
 	// Open or create database
 	dbPath := r.DatabasePath()
@@ -85,6 +90,7 @@ func (r *Repository) GetDependenciesWithDB(commitRef, branchName string) ([]data
 		return nil, nil, fmt.Errorf("getting dependencies: %w", err)
 	}
 
+	deps = filterDependencies(deps, filter)
 	return deps, db, nil
 }
 
@@ -107,7 +113,13 @@ func (r *Repository) IndexCommitSnapshot(db *database.DB, branchID int64, sha st
 		}
 	}
 
+	filter, err := r.EcosystemFilter()
+	if err != nil {
+		return fmt.Errorf("loading ecosystem config: %w", err)
+	}
+
 	a := analyzer.New()
+	a.SetEcosystemFilter(filter)
 	changes, err := a.DependenciesAtCommit(commit)
 	if err != nil {
 		return fmt.Errorf("analyzing commit: %w", err)
@@ -139,4 +151,17 @@ func (r *Repository) IndexCommitSnapshot(db *database.DB, branchID int64, sha st
 	}
 
 	return db.StoreSnapshot(branchID, commitInfo, snapshots)
+}
+
+func filterDependencies(deps []database.Dependency, filter config.EcosystemFilter) []database.Dependency {
+	if filter.Empty() || len(deps) == 0 {
+		return deps
+	}
+	filtered := make([]database.Dependency, 0, len(deps))
+	for _, dep := range deps {
+		if filter.Allows(dep.Ecosystem) {
+			filtered = append(filtered, dep)
+		}
+	}
+	return filtered
 }

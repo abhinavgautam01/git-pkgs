@@ -61,6 +61,10 @@ func runWhere(cmd *cobra.Command, args []string) error {
 	}
 
 	workDir := repo.WorkDir()
+	ecosystemFilter, err := repo.EcosystemFilter()
+	if err != nil {
+		return fmt.Errorf("loading ecosystem config: %w", err)
+	}
 
 	matcher := gitignore.New(workDir)
 
@@ -135,6 +139,9 @@ func runWhere(cmd *cobra.Command, args []string) error {
 
 		// Filter by ecosystem if specified
 		if ecosystem != "" && !strings.EqualFold(eco, ecosystem) {
+			return nil
+		}
+		if !ecosystemFilter.Allows(eco) {
 			return nil
 		}
 		fileMatches, err := searchFileForPackage(osRoot, osRel, relPath, packageName, eco, context)

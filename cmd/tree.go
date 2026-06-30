@@ -65,6 +65,11 @@ func runTree(cmd *cobra.Command, args []string) error {
 	}
 
 	deps = filterByEcosystem(deps, ecosystem)
+	ecosystemFilter, err := repo.EcosystemFilter()
+	if err != nil {
+		return fmt.Errorf("loading ecosystem config: %w", err)
+	}
+	deps = filterDependenciesByConfig(deps, ecosystemFilter.Allows)
 
 	tree := buildTree(deps)
 

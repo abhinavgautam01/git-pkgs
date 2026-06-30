@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/git-pkgs/git-pkgs/internal/config"
 	"github.com/git-pkgs/gitignore"
 	"github.com/git-pkgs/manifests"
 	"github.com/go-git/go-git/v5"
@@ -66,10 +67,11 @@ type cachedDiff struct {
 }
 
 type Analyzer struct {
-	blobCache map[string]*manifests.ParseResult
-	diffCache map[string]*cachedDiff
-	diffMu    sync.RWMutex
-	repoPath  string
+	blobCache       map[string]*manifests.ParseResult
+	diffCache       map[string]*cachedDiff
+	diffMu          sync.RWMutex
+	repoPath        string
+	ecosystemFilter config.EcosystemFilter
 }
 
 func New() *Analyzer {
@@ -82,6 +84,15 @@ func New() *Analyzer {
 // SetRepoPath sets the repository path for git shell commands.
 func (a *Analyzer) SetRepoPath(path string) {
 	a.repoPath = path
+}
+
+// SetEcosystemFilter limits which ecosystems are analyzed.
+func (a *Analyzer) SetEcosystemFilter(filter config.EcosystemFilter) {
+	a.ecosystemFilter = filter
+}
+
+func (a *Analyzer) allowsEcosystem(ecosystem string) bool {
+	return a.ecosystemFilter.Allows(ecosystem)
 }
 
 // ClearBlobCache replaces the blobCache with a fresh empty map,
@@ -296,6 +307,9 @@ func (a *Analyzer) AnalyzeCommit(commit *object.Commit, previousSnapshot Snapsho
 		if err != nil || deps == nil {
 			continue
 		}
+		if !a.allowsEcosystem(deps.Ecosystem) {
+			continue
+		}
 
 		// Merge integrity hashes from supplement files in same directory
 		supHashes := a.parseSupplementsInDir(tree, filepath.Dir(path))
@@ -342,6 +356,14 @@ func (a *Analyzer) AnalyzeCommit(commit *object.Commit, previousSnapshot Snapsho
 		}
 		afterDeps, err := a.parseManifestInTree(tree, path)
 		if err != nil || afterDeps == nil {
+			continue
+		}
+		if !a.allowsEcosystem(afterDeps.Ecosystem) {
+			for key := range result.Snapshot {
+				if key.ManifestPath == path {
+					delete(result.Snapshot, key)
+				}
+			}
 			continue
 		}
 
@@ -518,6 +540,9 @@ func (a *Analyzer) AnalyzeCommit(commit *object.Commit, previousSnapshot Snapsho
 		if deps == nil {
 			continue
 		}
+		if !a.allowsEcosystem(deps.Ecosystem) {
+			continue
+		}
 
 		for _, dep := range deps.Dependencies {
 			result.Changes = append(result.Changes, Change{
@@ -585,6 +610,9 @@ func (a *Analyzer) DependenciesAtCommit(commit *object.Commit) ([]Change, error)
 
 		result, err := a.parseManifestInTree(tree, f.Name)
 		if err != nil || result == nil {
+			return nil
+		}
+		if !a.allowsEcosystem(result.Ecosystem) {
 			return nil
 		}
 
@@ -772,6 +800,9 @@ func (a *Analyzer) DependenciesInWorkingDir(root string, includeSubmodules bool)
 
 		result, err := manifests.Parse(relPath, content)
 		if err != nil || result == nil {
+			return nil
+		}
+		if !a.allowsEcosystem(result.Ecosystem) {
 			return nil
 		}
 

@@ -763,8 +763,11 @@ git pkgs where lodash --include-submodules
 ```bash
 git config --add pkgs.ecosystems rubygems
 git config --add pkgs.ecosystems npm
+git config --add pkgs.ignoredEcosystems github-actions
 git pkgs info --ecosystems  # show enabled/disabled ecosystems
 ```
+
+`pkgs.ecosystems` is an allow-list. `pkgs.ignoredEcosystems` is a deny-list and takes precedence when both are configured. Re-run `git pkgs init --force` after changing these settings to rebuild an existing database with the new filter.
 
 **Ignored paths** let you skip directories or files from analysis:
 

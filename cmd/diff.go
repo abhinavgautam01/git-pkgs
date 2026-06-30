@@ -163,7 +163,12 @@ func diffWithWorkingTree(repo *git.Repository, fromRef string, includeSubmodules
 	}
 
 	// Parse working tree directly
+	ecosystemFilter, err := repo.EcosystemFilter()
+	if err != nil {
+		return nil, fmt.Errorf("loading ecosystem config: %w", err)
+	}
 	a := analyzer.New()
+	a.SetEcosystemFilter(ecosystemFilter)
 	toChanges, err := a.DependenciesInWorkingDir(repo.WorkDir(), includeSubmodules)
 	if err != nil {
 		return nil, fmt.Errorf("reading working tree: %w", err)

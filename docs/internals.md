@@ -67,6 +67,8 @@ For large repositories, the analyzer prefetches diffs using a single `git log` s
 
 `internal/analyzer` detects and parses manifest files using [git-pkgs/manifests](https://github.com/git-pkgs/manifests), which supports 35+ ecosystems including npm, RubyGems, PyPI, Cargo, Go modules, and more.
 
+Repository config can constrain analysis by ecosystem. `pkgs.ecosystems` acts as an allow-list, while `pkgs.ignoredEcosystems` acts as a deny-list that wins over the allow-list. Fresh indexing skips filtered ecosystems before writing changes or snapshots to SQLite.
+
 The analyzer maintains caches to avoid redundant work:
 
 - `blobCache` - parsed manifest contents keyed by git blob OID. If two commits have the same OID for a file, we parse it once.

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/git-pkgs/git-pkgs/internal/config"
 	"github.com/git-pkgs/git-pkgs/internal/mailmap"
 	"github.com/go-git/go-billy/v5/osfs"
 	"github.com/go-git/go-git/v5"
@@ -94,6 +95,10 @@ func (r *Repository) GitDir() string {
 
 func (r *Repository) WorkDir() string {
 	return r.workDir
+}
+
+func (r *Repository) EcosystemFilter() (config.EcosystemFilter, error) {
+	return config.LoadEcosystemFilter(r.workDir)
 }
 
 func (r *Repository) Head() (*plumbing.Reference, error) {
