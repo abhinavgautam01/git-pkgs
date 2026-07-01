@@ -501,6 +501,38 @@ func TestSearchCommand(t *testing.T) {
 			t.Error("expected 'express' in search results")
 		}
 	})
+
+	t.Run("applies ignored ecosystems to existing database", func(t *testing.T) {
+		repoDir := createTestRepo(t)
+		addFileAndCommit(t, repoDir, "package.json", packageJSON, "Add deps")
+
+		cleanup := chdir(t, repoDir)
+		defer cleanup()
+
+		rootCmd := cmd.NewRootCmd()
+		rootCmd.SetArgs([]string{"init"})
+		if err := rootCmd.Execute(); err != nil {
+			t.Fatalf("init failed: %v", err)
+		}
+		setGitConfig(t, repoDir, "pkgs.ignoredEcosystems", "npm")
+
+		var stdout bytes.Buffer
+		rootCmd = cmd.NewRootCmd()
+		rootCmd.SetArgs([]string{"search", "express", "--format", "json"})
+		rootCmd.SetOut(&stdout)
+
+		if err := rootCmd.Execute(); err != nil {
+			t.Fatalf("search failed: %v", err)
+		}
+
+		var result []map[string]interface{}
+		if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+			t.Fatalf("failed to parse JSON output: %v", err)
+		}
+		if len(result) != 0 {
+			t.Fatalf("expected ignored npm search results to be hidden, got: %#v", result)
+		}
+	})
 }
 
 func TestTreeCommand(t *testing.T) {

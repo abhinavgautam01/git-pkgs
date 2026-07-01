@@ -73,6 +73,15 @@ func setGitUser(t *testing.T, repoDir, name, email string) {
 	}
 }
 
+func setGitConfig(t *testing.T, repoDir, key, value string) {
+	t.Helper()
+	gitCmd := exec.Command("git", "config", key, value)
+	gitCmd.Dir = repoDir
+	if err := gitCmd.Run(); err != nil {
+		t.Fatalf("failed to set git config %s: %v", key, err)
+	}
+}
+
 func chdir(t *testing.T, dir string) func() {
 	t.Helper()
 	oldWd, err := os.Getwd()

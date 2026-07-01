@@ -93,11 +93,16 @@ func outputUrlsText(cmd *cobra.Command, urls map[string]string) error {
 }
 
 func lookupPackage(name, ecosystem string) (purlType, pkgName, version string, err error) {
-	_, db, err := openDatabase()
+	repo, db, err := openDatabase()
 	if err != nil {
 		return "", "", "", err
 	}
 	defer func() { _ = db.Close() }()
+
+	ecosystemFilter, err := repo.EcosystemFilter()
+	if err != nil {
+		return "", "", "", fmt.Errorf("loading ecosystem config: %w", err)
+	}
 
 	branchInfo, err := db.GetDefaultBranch()
 	if err != nil {
@@ -108,6 +113,7 @@ func lookupPackage(name, ecosystem string) (purlType, pkgName, version string, e
 	if err != nil {
 		return "", "", "", fmt.Errorf("searching dependencies: %w", err)
 	}
+	results = filterSearchResultsByConfig(results, ecosystemFilter.Allows)
 
 	if len(results) == 0 {
 		if ecosystem != "" {

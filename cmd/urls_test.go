@@ -180,6 +180,25 @@ func TestUrlsNameLookup(t *testing.T) {
 		}
 	})
 
+	t.Run("plain name lookup ignores configured ecosystems from existing database", func(t *testing.T) {
+		repoDir := createTestRepo(t)
+		addFileAndCommit(t, repoDir, "package.json", `{"dependencies":{"lodash":"^4.17.21"}}`, "Add package.json")
+		addFileAndCommit(t, repoDir, "Gemfile", "source \"https://rubygems.org\"\ngem \"lodash\", \"~> 1.0\"\n", "Add Gemfile")
+
+		cleanup := chdir(t, repoDir)
+		defer cleanup()
+
+		if _, _, err := runCmd(t, "init"); err != nil {
+			t.Fatalf("init failed: %v", err)
+		}
+		setGitConfig(t, repoDir, "pkgs.ignoredEcosystems", "npm")
+
+		urls := runUrlsJSON(t, "lodash")
+		if urls["purl"] != "pkg:gem/lodash" {
+			t.Errorf("expected ignored npm lookup to select rubygems purl, got: %q", urls["purl"])
+		}
+	})
+
 	t.Run("errors when package not found", func(t *testing.T) {
 		initRepoWithFiles(t, map[string]string{"package.json": packageJSON})
 

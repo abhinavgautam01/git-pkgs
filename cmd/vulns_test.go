@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/git-pkgs/git-pkgs/internal/config"
 	"github.com/git-pkgs/git-pkgs/internal/database"
 	"github.com/git-pkgs/purl"
 	"github.com/git-pkgs/sarif"
@@ -400,6 +401,82 @@ func TestScanLiveWithSourceBatchErrorIdentifiesDependency(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not include %q", err, want)
 		}
+	}
+}
+
+func TestGetVulnsAtRefAppliesEcosystemConfig(t *testing.T) {
+	db := newTestDB(t)
+	branch, err := db.GetOrCreateBranch("main")
+	if err != nil {
+		t.Fatalf("GetOrCreateBranch: %v", err)
+	}
+
+	commitSHA := strings.Repeat("a", shaHashLen)
+	commit := database.CommitInfo{
+		SHA:         commitSHA,
+		Message:     "add deps",
+		AuthorName:  "Test User",
+		AuthorEmail: "test@example.com",
+		CommittedAt: time.Now(),
+	}
+	snapshots := []database.SnapshotInfo{
+		{
+			ManifestPath:   "package-lock.json",
+			Name:           "foo",
+			Ecosystem:      "npm",
+			PURL:           "pkg:npm/foo@1.0.0",
+			Requirement:    "1.0.0",
+			DependencyType: "runtime",
+			Integrity:      "sha512-test",
+		},
+		{
+			ManifestPath:   "Gemfile.lock",
+			Name:           "bar",
+			Ecosystem:      "rubygems",
+			PURL:           "pkg:gem/bar@1.0.0",
+			Requirement:    "1.0.0",
+			DependencyType: "runtime",
+			Integrity:      "sha256-test",
+		},
+	}
+	if err := db.StoreSnapshot(branch.ID, commit, snapshots); err != nil {
+		t.Fatalf("StoreSnapshot: %v", err)
+	}
+
+	vuln := database.Vulnerability{
+		ID:        "GHSA-ignored",
+		Severity:  "high",
+		Summary:   "ignored ecosystem vuln",
+		FetchedAt: time.Now().Format(time.RFC3339),
+	}
+	if err := db.InsertVulnerability(vuln); err != nil {
+		t.Fatalf("InsertVulnerability: %v", err)
+	}
+	if err := db.InsertVulnerabilityPackage(database.VulnerabilityPackage{
+		VulnerabilityID:  vuln.ID,
+		Ecosystem:        "npm",
+		PackageName:      "foo",
+		AffectedVersions: "vers:npm/>=1.0.0|<2.0.0",
+		FixedVersions:    "2.0.0",
+	}); err != nil {
+		t.Fatalf("InsertVulnerabilityPackage: %v", err)
+	}
+
+	unfiltered, err := getVulnsAtRef(db, branch.ID, commitSHA, "", nil)
+	if err != nil {
+		t.Fatalf("getVulnsAtRef without filter: %v", err)
+	}
+	if len(unfiltered) != 1 || unfiltered[0].Package != "foo" {
+		t.Fatalf("expected seeded npm vuln before filtering, got: %#v", unfiltered)
+	}
+
+	filter := config.NewEcosystemFilter(nil, []string{"npm"})
+	results, err := getVulnsAtRef(db, branch.ID, commitSHA, "", filter.Allows)
+	if err != nil {
+		t.Fatalf("getVulnsAtRef: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected ignored npm vuln to be filtered, got: %#v", results)
 	}
 }
 

@@ -137,3 +137,16 @@ func filterDependenciesByConfig(deps []database.Dependency, allows func(string) 
 	}
 	return filtered
 }
+
+func filterSearchResultsByConfig(results []database.SearchResult, allows func(string) bool) []database.SearchResult {
+	if len(results) == 0 {
+		return results
+	}
+	filtered := make([]database.SearchResult, 0, len(results))
+	for _, r := range results {
+		if allows(r.Ecosystem) {
+			filtered = append(filtered, r)
+		}
+	}
+	return filtered
+}

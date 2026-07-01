@@ -272,11 +272,16 @@ func runVulnsSync(cmd *cobra.Command, args []string) error {
 	force, _ := cmd.Flags().GetBool("force")
 	quiet, _ := cmd.Flags().GetBool("quiet")
 
-	_, db, err := openDatabase()
+	repo, db, err := openDatabase()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = db.Close() }()
+
+	ecosystemFilter, err := repo.EcosystemFilter()
+	if err != nil {
+		return fmt.Errorf("loading ecosystem config: %w", err)
+	}
 
 	branch, err := resolveBranch(db, branchName)
 	if err != nil {
@@ -290,6 +295,7 @@ func runVulnsSync(cmd *cobra.Command, args []string) error {
 	}
 
 	// Filter to resolved lockfile deps
+	deps = filterDependenciesByConfig(deps, ecosystemFilter.Allows)
 	deps = filterByEcosystem(deps, ecosystem)
 	var lockfileDeps []database.Dependency
 	for _, d := range deps {
@@ -1060,11 +1066,16 @@ func runVulnsShow(cmd *cobra.Command, args []string) error {
 }
 
 func analyzeVulnExposure(vuln *vulns.Vulnerability, ref, branchName string) (*VulnShowExposure, error) {
-	_, db, err := openDatabase()
+	repo, db, err := openDatabase()
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = db.Close() }()
+
+	ecosystemFilter, err := repo.EcosystemFilter()
+	if err != nil {
+		return nil, fmt.Errorf("loading ecosystem config: %w", err)
+	}
 
 	branch, err := resolveBranch(db, branchName)
 	if err != nil {
@@ -1076,6 +1087,7 @@ func analyzeVulnExposure(vuln *vulns.Vulnerability, ref, branchName string) (*Vu
 	if err != nil {
 		return nil, fmt.Errorf("getting dependencies: %w", err)
 	}
+	deps = filterDependenciesByConfig(deps, ecosystemFilter.Allows)
 
 	// Check if any dependency is affected by this vulnerability
 	for _, dep := range deps {
@@ -1181,11 +1193,16 @@ func runVulnsDiff(cmd *cobra.Command, args []string) error {
 		toRef = args[1]
 	}
 
-	_, db, err := openDatabase()
+	repo, db, err := openDatabase()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = db.Close() }()
+
+	ecosystemFilter, err := repo.EcosystemFilter()
+	if err != nil {
+		return fmt.Errorf("loading ecosystem config: %w", err)
+	}
 
 	branch, err := resolveBranch(db, branchName)
 	if err != nil {
@@ -1193,12 +1210,12 @@ func runVulnsDiff(cmd *cobra.Command, args []string) error {
 	}
 
 	// Get vulnerabilities at both refs
-	fromVulns, err := getVulnsAtRef(db, branch.ID, fromRef, ecosystem)
+	fromVulns, err := getVulnsAtRef(db, branch.ID, fromRef, ecosystem, ecosystemFilter.Allows)
 	if err != nil {
 		return fmt.Errorf("getting vulns at %s: %w", fromRef, err)
 	}
 
-	toVulns, err := getVulnsAtRef(db, branch.ID, toRef, ecosystem)
+	toVulns, err := getVulnsAtRef(db, branch.ID, toRef, ecosystem, ecosystemFilter.Allows)
 	if err != nil {
 		return fmt.Errorf("getting vulns at %s: %w", toRef, err)
 	}
@@ -1271,12 +1288,15 @@ func runVulnsDiff(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func getVulnsAtRef(db *database.DB, branchID int64, ref, ecosystem string) ([]VulnResult, error) {
+func getVulnsAtRef(db *database.DB, branchID int64, ref, ecosystem string, allows func(string) bool) ([]VulnResult, error) {
 	deps, err := db.GetDependenciesAtRef(ref, branchID)
 	if err != nil {
 		return nil, err
 	}
 
+	if allows != nil {
+		deps = filterDependenciesByConfig(deps, allows)
+	}
 	deps = filterByEcosystem(deps, ecosystem)
 
 	var lockfileDeps []database.Dependency
@@ -1296,7 +1316,7 @@ func getVulnsAtRef(db *database.DB, branchID int64, ref, ecosystem string) ([]Vu
 
 // getAllTimeVulns gets all vulnerabilities that have ever affected the codebase
 // by scanning commit history and collecting any vulnerability that was present.
-func getAllTimeVulns(db *database.DB, branchID int64, ecosystem string) ([]VulnResult, error) {
+func getAllTimeVulns(db *database.DB, branchID int64, ecosystem string, allows func(string) bool) ([]VulnResult, error) {
 	// Get recent commits with changes
 	const allTimeVulnsLimit = 100
 	commits, err := db.GetCommitsWithChanges(database.LogOptions{
@@ -1312,7 +1332,7 @@ func getAllTimeVulns(db *database.DB, branchID int64, ecosystem string) ([]VulnR
 	seen := make(map[string]VulnResult) // key: vulnID:package:version
 
 	for _, c := range commits {
-		vulns, err := getVulnsAtRef(db, branchID, c.SHA, ecosystem)
+		vulns, err := getVulnsAtRef(db, branchID, c.SHA, ecosystem, allows)
 		if err != nil {
 			continue
 		}
@@ -1373,11 +1393,16 @@ func runVulnsBlame(cmd *cobra.Command, args []string) error {
 	}
 	allTime, _ := cmd.Flags().GetBool("all-time")
 
-	_, db, err := openDatabase()
+	repo, db, err := openDatabase()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = db.Close() }()
+
+	ecosystemFilter, err := repo.EcosystemFilter()
+	if err != nil {
+		return fmt.Errorf("loading ecosystem config: %w", err)
+	}
 
 	branch, err := resolveBranch(db, branchName)
 	if err != nil {
@@ -1387,9 +1412,9 @@ func runVulnsBlame(cmd *cobra.Command, args []string) error {
 	// Get vulnerabilities
 	var vulns []VulnResult
 	if allTime {
-		vulns, err = getAllTimeVulns(db, branch.ID, ecosystem)
+		vulns, err = getAllTimeVulns(db, branch.ID, ecosystem, ecosystemFilter.Allows)
 	} else {
-		vulns, err = getVulnsAtRef(db, branch.ID, refHEAD, ecosystem)
+		vulns, err = getVulnsAtRef(db, branch.ID, refHEAD, ecosystem, ecosystemFilter.Allows)
 	}
 	if err != nil {
 		return fmt.Errorf("getting vulnerabilities: %w", err)
@@ -1546,11 +1571,16 @@ func runVulnsLog(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	_, db, err := openDatabase()
+	repo, db, err := openDatabase()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = db.Close() }()
+
+	ecosystemFilter, err := repo.EcosystemFilter()
+	if err != nil {
+		return fmt.Errorf("loading ecosystem config: %w", err)
+	}
 
 	branch, err := resolveBranch(db, branchName)
 	if err != nil {
@@ -1592,7 +1622,7 @@ func runVulnsLog(cmd *cobra.Command, args []string) error {
 
 	for i, c := range commits {
 		// Get vulns at this commit
-		currentVulns, err := getVulnsAtRef(db, branch.ID, c.SHA, ecosystem)
+		currentVulns, err := getVulnsAtRef(db, branch.ID, c.SHA, ecosystem, ecosystemFilter.Allows)
 		if err != nil {
 			continue
 		}
@@ -1722,11 +1752,16 @@ func runVulnsHistory(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	_, db, err := openDatabase()
+	repo, db, err := openDatabase()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = db.Close() }()
+
+	ecosystemFilter, err := repo.EcosystemFilter()
+	if err != nil {
+		return fmt.Errorf("loading ecosystem config: %w", err)
+	}
 
 	branch, err := resolveBranch(db, branchName)
 	if err != nil {
@@ -1750,6 +1785,7 @@ func runVulnsHistory(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			continue
 		}
+		deps = filterDependenciesByConfig(deps, ecosystemFilter.Allows)
 
 		// Find the package in deps
 		var pkgDep *database.Dependency
@@ -1872,11 +1908,16 @@ func runVulnsExposure(cmd *cobra.Command, args []string) error {
 	summary, _ := cmd.Flags().GetBool("summary")
 	allTime, _ := cmd.Flags().GetBool("all-time")
 
-	_, db, err := openDatabase()
+	repo, db, err := openDatabase()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = db.Close() }()
+
+	ecosystemFilter, err := repo.EcosystemFilter()
+	if err != nil {
+		return fmt.Errorf("loading ecosystem config: %w", err)
+	}
 
 	branch, err := resolveBranch(db, branchName)
 	if err != nil {
@@ -1892,9 +1933,9 @@ func runVulnsExposure(cmd *cobra.Command, args []string) error {
 	var vulns []VulnResult
 	if allTime {
 		// Get all historical vulnerabilities by scanning commit history
-		vulns, err = getAllTimeVulns(db, branch.ID, ecosystem)
+		vulns, err = getAllTimeVulns(db, branch.ID, ecosystem, ecosystemFilter.Allows)
 	} else {
-		vulns, err = getVulnsAtRef(db, branch.ID, targetRef, ecosystem)
+		vulns, err = getVulnsAtRef(db, branch.ID, targetRef, ecosystem, ecosystemFilter.Allows)
 	}
 	if err != nil {
 		return fmt.Errorf("getting vulnerabilities: %w", err)
@@ -2101,11 +2142,16 @@ func runVulnsPraise(cmd *cobra.Command, args []string) error {
 	}
 	summary, _ := cmd.Flags().GetBool("summary")
 
-	_, db, err := openDatabase()
+	repo, db, err := openDatabase()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = db.Close() }()
+
+	ecosystemFilter, err := repo.EcosystemFilter()
+	if err != nil {
+		return fmt.Errorf("loading ecosystem config: %w", err)
+	}
 
 	branch, err := resolveBranch(db, branchName)
 	if err != nil {
@@ -2143,7 +2189,7 @@ func runVulnsPraise(cmd *cobra.Command, args []string) error {
 	var prevVulns []VulnResult
 
 	for i, c := range commits {
-		currentVulns, err := getVulnsAtRef(db, branch.ID, c.SHA, ecosystem)
+		currentVulns, err := getVulnsAtRef(db, branch.ID, c.SHA, ecosystem, ecosystemFilter.Allows)
 		if err != nil {
 			continue
 		}

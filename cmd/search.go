@@ -33,11 +33,16 @@ func runSearch(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	_, db, err := openDatabase()
+	repo, db, err := openDatabase()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = db.Close() }()
+
+	ecosystemFilter, err := repo.EcosystemFilter()
+	if err != nil {
+		return fmt.Errorf("loading ecosystem config: %w", err)
+	}
 
 	branchInfo, err := db.GetDefaultBranch()
 	if err != nil {
@@ -48,6 +53,7 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("searching: %w", err)
 	}
+	results = filterSearchResultsByConfig(results, ecosystemFilter.Allows)
 
 	switch format {
 	case formatJSON:
