@@ -386,7 +386,10 @@ func runVulnsScan(cmd *cobra.Command, args []string) error {
 	branchName, _ := cmd.Flags().GetString("branch")
 	ecosystem, _ := cmd.Flags().GetString("ecosystem")
 	severity, _ := cmd.Flags().GetString("severity")
-	format, _ := cmd.Flags().GetString("format")
+	format, err := getFormatFlag(cmd, formatText, formatJSON, formatSARIF)
+	if err != nil {
+		return err
+	}
 	live, _ := cmd.Flags().GetBool("live")
 	noSync, _ := cmd.Flags().GetBool("no-sync")
 
@@ -813,7 +816,10 @@ type VulnShowExposure struct {
 
 func runVulnsShow(cmd *cobra.Command, args []string) error {
 	vulnID := args[0]
-	format, _ := cmd.Flags().GetString("format")
+	format, err := getFormatFlag(cmd, formatText, formatJSON)
+	if err != nil {
+		return err
+	}
 	ref, _ := cmd.Flags().GetString("ref")
 	branchName, _ := cmd.Flags().GetString("branch")
 
@@ -1016,7 +1022,10 @@ func runVulnsDiff(cmd *cobra.Command, args []string) error {
 	branchName, _ := cmd.Flags().GetString("branch")
 	ecosystem, _ := cmd.Flags().GetString("ecosystem")
 	severity, _ := cmd.Flags().GetString("severity")
-	format, _ := cmd.Flags().GetString("format")
+	format, err := getFormatFlag(cmd, formatText, formatJSON)
+	if err != nil {
+		return err
+	}
 
 	fromRef := "HEAD~1"
 	toRef := refHEAD
@@ -1213,7 +1222,10 @@ func runVulnsBlame(cmd *cobra.Command, args []string) error {
 	branchName, _ := cmd.Flags().GetString("branch")
 	ecosystem, _ := cmd.Flags().GetString("ecosystem")
 	severity, _ := cmd.Flags().GetString("severity")
-	format, _ := cmd.Flags().GetString("format")
+	format, err := getFormatFlag(cmd, formatText, formatJSON)
+	if err != nil {
+		return err
+	}
 	allTime, _ := cmd.Flags().GetBool("all-time")
 
 	_, db, err := openDatabase()
@@ -1384,7 +1396,10 @@ func runVulnsLog(cmd *cobra.Command, args []string) error {
 	introducedOnly, _ := cmd.Flags().GetBool("introduced")
 	fixedOnly, _ := cmd.Flags().GetBool("fixed")
 	limit, _ := cmd.Flags().GetInt("limit")
-	format, _ := cmd.Flags().GetString("format")
+	format, err := getFormatFlag(cmd, formatText, formatJSON)
+	if err != nil {
+		return err
+	}
 
 	_, db, err := openDatabase()
 	if err != nil {
@@ -1552,7 +1567,10 @@ func runVulnsHistory(cmd *cobra.Command, args []string) error {
 	ecosystemFlag, _ := cmd.Flags().GetString("ecosystem")
 	branchName, _ := cmd.Flags().GetString("branch")
 	limit, _ := cmd.Flags().GetInt("limit")
-	format, _ := cmd.Flags().GetString("format")
+	format, err := getFormatFlag(cmd, formatText, formatJSON)
+	if err != nil {
+		return err
+	}
 
 	ecosystem, packageName, _, err := ParsePackageArg(args[0], ecosystemFlag)
 	if err != nil {
@@ -1702,7 +1720,10 @@ func runVulnsExposure(cmd *cobra.Command, args []string) error {
 	ref, _ := cmd.Flags().GetString("ref")
 	ecosystem, _ := cmd.Flags().GetString("ecosystem")
 	severity, _ := cmd.Flags().GetString("severity")
-	format, _ := cmd.Flags().GetString("format")
+	format, err := getFormatFlag(cmd, formatText, formatJSON)
+	if err != nil {
+		return err
+	}
 	summary, _ := cmd.Flags().GetBool("summary")
 	allTime, _ := cmd.Flags().GetBool("all-time")
 
@@ -1929,7 +1950,10 @@ func runVulnsPraise(cmd *cobra.Command, args []string) error {
 	ecosystem, _ := cmd.Flags().GetString("ecosystem")
 	severity, _ := cmd.Flags().GetString("severity")
 	limit, _ := cmd.Flags().GetInt("limit")
-	format, _ := cmd.Flags().GetString("format")
+	format, err := getFormatFlag(cmd, formatText, formatJSON)
+	if err != nil {
+		return err
+	}
 	summary, _ := cmd.Flags().GetBool("summary")
 
 	_, db, err := openDatabase()
