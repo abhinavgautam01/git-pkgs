@@ -23,9 +23,10 @@ func addSchemaCmd(parent *cobra.Command) {
 }
 
 type TableSchema struct {
-	Name    string         `json:"name"`
-	Columns []ColumnSchema `json:"columns"`
-	Indexes []string       `json:"indexes,omitempty"`
+	Name     string         `json:"name"`
+	Columns  []ColumnSchema `json:"columns"`
+	Indexes  []string       `json:"indexes,omitempty"`
+	IndexSQL []string       `json:"-"`
 }
 
 type ColumnSchema struct {
@@ -131,10 +132,12 @@ func getSchemaInfo(db *database.DB) ([]TableSchema, error) {
 		}
 		_ = colRows.Close()
 
-		// Get indexes
+		// Get indexes. Keep the public schema shape as index names, but retain
+		// SQLite's original DDL for SQL output.
 		idxRows, err := db.Query(`
-			SELECT name FROM sqlite_master
+			SELECT name, sql FROM sqlite_master
 			WHERE type='index' AND tbl_name=? AND name NOT LIKE 'sqlite_%'
+			ORDER BY name
 		`, tableName)
 		if err != nil {
 			return nil, err
@@ -142,11 +145,19 @@ func getSchemaInfo(db *database.DB) ([]TableSchema, error) {
 
 		for idxRows.Next() {
 			var name string
-			if err := idxRows.Scan(&name); err != nil {
+			var sql string
+			if err := idxRows.Scan(&name, &sql); err != nil {
 				_ = idxRows.Close()
 				return nil, err
 			}
 			table.Indexes = append(table.Indexes, name)
+			if sql != "" {
+				table.IndexSQL = append(table.IndexSQL, sql)
+			}
+		}
+		if err := idxRows.Err(); err != nil {
+			_ = idxRows.Close()
+			return nil, err
 		}
 		_ = idxRows.Close()
 
@@ -182,13 +193,21 @@ func outputSchemaSQL(cmd *cobra.Command, tables []TableSchema) {
 		_, _ = fmt.Fprintln(cmd.OutOrStdout(), ");")
 		_, _ = fmt.Fprintln(cmd.OutOrStdout())
 
-		for _, idx := range table.Indexes {
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "CREATE INDEX %s ON %s(...);\n", idx, table.Name)
+		for _, idxSQL := range table.IndexSQL {
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), terminateSQL(idxSQL))
 		}
-		if len(table.Indexes) > 0 {
+		if len(table.IndexSQL) > 0 {
 			_, _ = fmt.Fprintln(cmd.OutOrStdout())
 		}
 	}
+}
+
+func terminateSQL(sql string) string {
+	sql = strings.TrimSpace(sql)
+	if strings.HasSuffix(sql, ";") {
+		return sql
+	}
+	return sql + ";"
 }
 
 func outputSchemaMarkdown(cmd *cobra.Command, tables []TableSchema) {
