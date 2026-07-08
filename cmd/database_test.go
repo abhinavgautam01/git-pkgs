@@ -417,6 +417,17 @@ func TestSchemaCommand(t *testing.T) {
 		if !strings.Contains(stdout, "CREATE TABLE") {
 			t.Errorf("expected CREATE TABLE statements, got: %s", stdout)
 		}
+		if strings.Contains(stdout, "(...)") {
+			t.Errorf("expected real index columns in SQL output, got placeholder: %s", stdout)
+		}
+		for _, want := range []string{
+			"idx_branch_commits_unique ON branch_commits(branch_id, commit_id)",
+			"idx_branch_commits_position ON branch_commits(branch_id, position DESC)",
+		} {
+			if !strings.Contains(stdout, want) {
+				t.Errorf("expected index DDL containing %q, got: %s", want, stdout)
+			}
+		}
 	})
 
 	t.Run("outputs markdown format", func(t *testing.T) {
