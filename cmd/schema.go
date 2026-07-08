@@ -155,6 +155,10 @@ func getSchemaInfo(db *database.DB) ([]TableSchema, error) {
 				table.IndexSQL = append(table.IndexSQL, sql)
 			}
 		}
+		if err := idxRows.Err(); err != nil {
+			_ = idxRows.Close()
+			return nil, err
+		}
 		_ = idxRows.Close()
 
 		tables = append(tables, table)
