@@ -252,12 +252,12 @@ func TestInitCommand(t *testing.T) {
 			t.Fatalf("expected no npm snapshots, got %d", npmCount)
 		}
 
-		var rubygemsCount int
-		if err := db.QueryRow("SELECT COUNT(*) FROM dependency_snapshots WHERE ecosystem = 'gem'").Scan(&rubygemsCount); err != nil {
-			t.Fatalf("failed to count gem snapshots: %v", err)
+		var rubyCount int
+		if err := db.QueryRow("SELECT COUNT(*) FROM dependency_snapshots WHERE ecosystem IN ('gem', 'rubygems')").Scan(&rubyCount); err != nil {
+			t.Fatalf("failed to count RubyGems snapshots: %v", err)
 		}
-		if rubygemsCount == 0 {
-			t.Fatal("expected gem snapshots to remain indexed")
+		if rubyCount == 0 {
+			t.Fatal("expected RubyGems snapshots to remain indexed")
 		}
 	})
 
