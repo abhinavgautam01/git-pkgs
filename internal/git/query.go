@@ -90,7 +90,7 @@ func (r *Repository) GetDependenciesWithDB(commitRef, branchName string) ([]data
 		return nil, nil, fmt.Errorf("getting dependencies: %w", err)
 	}
 
-	deps = filterDependencies(deps, filter)
+	deps = FilterDependenciesByEcosystemConfig(deps, filter)
 	return deps, db, nil
 }
 
@@ -153,7 +153,7 @@ func (r *Repository) IndexCommitSnapshot(db *database.DB, branchID int64, sha st
 	return db.StoreSnapshot(branchID, commitInfo, snapshots)
 }
 
-func filterDependencies(deps []database.Dependency, filter config.EcosystemFilter) []database.Dependency {
+func FilterDependenciesByEcosystemConfig(deps []database.Dependency, filter config.EcosystemFilter) []database.Dependency {
 	if filter.Empty() || len(deps) == 0 {
 		return deps
 	}

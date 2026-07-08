@@ -6,6 +6,7 @@ import (
 	"sort"
 
 	"github.com/git-pkgs/git-pkgs/internal/database"
+	"github.com/git-pkgs/git-pkgs/internal/git"
 	"github.com/spf13/cobra"
 )
 
@@ -69,7 +70,7 @@ func runTree(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("loading ecosystem config: %w", err)
 	}
-	deps = filterDependenciesByConfig(deps, ecosystemFilter.Allows)
+	deps = git.FilterDependenciesByEcosystemConfig(deps, ecosystemFilter)
 
 	tree := buildTree(deps)
 

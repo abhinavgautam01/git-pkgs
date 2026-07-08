@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/git-pkgs/git-pkgs/internal/config"
 	"github.com/git-pkgs/git-pkgs/internal/database"
 	"github.com/git-pkgs/git-pkgs/internal/git"
 	"github.com/git-pkgs/purl"
@@ -295,7 +296,7 @@ func runVulnsSync(cmd *cobra.Command, args []string) error {
 	}
 
 	// Filter to resolved lockfile deps
-	deps = filterDependenciesByConfig(deps, ecosystemFilter.Allows)
+	deps = git.FilterDependenciesByEcosystemConfig(deps, ecosystemFilter)
 	deps = filterByEcosystem(deps, ecosystem)
 	var lockfileDeps []database.Dependency
 	for _, d := range deps {
@@ -1087,7 +1088,7 @@ func analyzeVulnExposure(vuln *vulns.Vulnerability, ref, branchName string) (*Vu
 	if err != nil {
 		return nil, fmt.Errorf("getting dependencies: %w", err)
 	}
-	deps = filterDependenciesByConfig(deps, ecosystemFilter.Allows)
+	deps = git.FilterDependenciesByEcosystemConfig(deps, ecosystemFilter)
 
 	// Check if any dependency is affected by this vulnerability
 	for _, dep := range deps {
@@ -1210,12 +1211,12 @@ func runVulnsDiff(cmd *cobra.Command, args []string) error {
 	}
 
 	// Get vulnerabilities at both refs
-	fromVulns, err := getVulnsAtRef(db, branch.ID, fromRef, ecosystem, ecosystemFilter.Allows)
+	fromVulns, err := getVulnsAtRef(db, branch.ID, fromRef, ecosystem, ecosystemFilter)
 	if err != nil {
 		return fmt.Errorf("getting vulns at %s: %w", fromRef, err)
 	}
 
-	toVulns, err := getVulnsAtRef(db, branch.ID, toRef, ecosystem, ecosystemFilter.Allows)
+	toVulns, err := getVulnsAtRef(db, branch.ID, toRef, ecosystem, ecosystemFilter)
 	if err != nil {
 		return fmt.Errorf("getting vulns at %s: %w", toRef, err)
 	}
@@ -1288,15 +1289,13 @@ func runVulnsDiff(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func getVulnsAtRef(db *database.DB, branchID int64, ref, ecosystem string, allows func(string) bool) ([]VulnResult, error) {
+func getVulnsAtRef(db *database.DB, branchID int64, ref, ecosystem string, filter config.EcosystemFilter) ([]VulnResult, error) {
 	deps, err := db.GetDependenciesAtRef(ref, branchID)
 	if err != nil {
 		return nil, err
 	}
 
-	if allows != nil {
-		deps = filterDependenciesByConfig(deps, allows)
-	}
+	deps = git.FilterDependenciesByEcosystemConfig(deps, filter)
 	deps = filterByEcosystem(deps, ecosystem)
 
 	var lockfileDeps []database.Dependency
@@ -1316,7 +1315,7 @@ func getVulnsAtRef(db *database.DB, branchID int64, ref, ecosystem string, allow
 
 // getAllTimeVulns gets all vulnerabilities that have ever affected the codebase
 // by scanning commit history and collecting any vulnerability that was present.
-func getAllTimeVulns(db *database.DB, branchID int64, ecosystem string, allows func(string) bool) ([]VulnResult, error) {
+func getAllTimeVulns(db *database.DB, branchID int64, ecosystem string, filter config.EcosystemFilter) ([]VulnResult, error) {
 	// Get recent commits with changes
 	const allTimeVulnsLimit = 100
 	commits, err := db.GetCommitsWithChanges(database.LogOptions{
@@ -1332,7 +1331,7 @@ func getAllTimeVulns(db *database.DB, branchID int64, ecosystem string, allows f
 	seen := make(map[string]VulnResult) // key: vulnID:package:version
 
 	for _, c := range commits {
-		vulns, err := getVulnsAtRef(db, branchID, c.SHA, ecosystem, allows)
+		vulns, err := getVulnsAtRef(db, branchID, c.SHA, ecosystem, filter)
 		if err != nil {
 			continue
 		}
@@ -1412,9 +1411,9 @@ func runVulnsBlame(cmd *cobra.Command, args []string) error {
 	// Get vulnerabilities
 	var vulns []VulnResult
 	if allTime {
-		vulns, err = getAllTimeVulns(db, branch.ID, ecosystem, ecosystemFilter.Allows)
+		vulns, err = getAllTimeVulns(db, branch.ID, ecosystem, ecosystemFilter)
 	} else {
-		vulns, err = getVulnsAtRef(db, branch.ID, refHEAD, ecosystem, ecosystemFilter.Allows)
+		vulns, err = getVulnsAtRef(db, branch.ID, refHEAD, ecosystem, ecosystemFilter)
 	}
 	if err != nil {
 		return fmt.Errorf("getting vulnerabilities: %w", err)
@@ -1622,7 +1621,7 @@ func runVulnsLog(cmd *cobra.Command, args []string) error {
 
 	for i, c := range commits {
 		// Get vulns at this commit
-		currentVulns, err := getVulnsAtRef(db, branch.ID, c.SHA, ecosystem, ecosystemFilter.Allows)
+		currentVulns, err := getVulnsAtRef(db, branch.ID, c.SHA, ecosystem, ecosystemFilter)
 		if err != nil {
 			continue
 		}
@@ -1785,7 +1784,7 @@ func runVulnsHistory(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			continue
 		}
-		deps = filterDependenciesByConfig(deps, ecosystemFilter.Allows)
+		deps = git.FilterDependenciesByEcosystemConfig(deps, ecosystemFilter)
 
 		// Find the package in deps
 		var pkgDep *database.Dependency
@@ -1933,9 +1932,9 @@ func runVulnsExposure(cmd *cobra.Command, args []string) error {
 	var vulns []VulnResult
 	if allTime {
 		// Get all historical vulnerabilities by scanning commit history
-		vulns, err = getAllTimeVulns(db, branch.ID, ecosystem, ecosystemFilter.Allows)
+		vulns, err = getAllTimeVulns(db, branch.ID, ecosystem, ecosystemFilter)
 	} else {
-		vulns, err = getVulnsAtRef(db, branch.ID, targetRef, ecosystem, ecosystemFilter.Allows)
+		vulns, err = getVulnsAtRef(db, branch.ID, targetRef, ecosystem, ecosystemFilter)
 	}
 	if err != nil {
 		return fmt.Errorf("getting vulnerabilities: %w", err)
@@ -2189,7 +2188,7 @@ func runVulnsPraise(cmd *cobra.Command, args []string) error {
 	var prevVulns []VulnResult
 
 	for i, c := range commits {
-		currentVulns, err := getVulnsAtRef(db, branch.ID, c.SHA, ecosystem, ecosystemFilter.Allows)
+		currentVulns, err := getVulnsAtRef(db, branch.ID, c.SHA, ecosystem, ecosystemFilter)
 		if err != nil {
 			continue
 		}

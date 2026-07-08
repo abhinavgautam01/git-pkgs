@@ -462,7 +462,7 @@ func TestGetVulnsAtRefAppliesEcosystemConfig(t *testing.T) {
 		t.Fatalf("InsertVulnerabilityPackage: %v", err)
 	}
 
-	unfiltered, err := getVulnsAtRef(db, branch.ID, commitSHA, "", nil)
+	unfiltered, err := getVulnsAtRef(db, branch.ID, commitSHA, "", config.NewEcosystemFilter(nil, nil))
 	if err != nil {
 		t.Fatalf("getVulnsAtRef without filter: %v", err)
 	}
@@ -471,7 +471,7 @@ func TestGetVulnsAtRefAppliesEcosystemConfig(t *testing.T) {
 	}
 
 	filter := config.NewEcosystemFilter(nil, []string{"npm"})
-	results, err := getVulnsAtRef(db, branch.ID, commitSHA, "", filter.Allows)
+	results, err := getVulnsAtRef(db, branch.ID, commitSHA, "", filter)
 	if err != nil {
 		t.Fatalf("getVulnsAtRef: %v", err)
 	}

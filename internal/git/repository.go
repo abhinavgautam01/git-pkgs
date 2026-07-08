@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/git-pkgs/git-pkgs/internal/config"
 	"github.com/git-pkgs/git-pkgs/internal/mailmap"
@@ -21,10 +22,13 @@ import (
 const DatabaseFile = "pkgs.sqlite3"
 
 type Repository struct {
-	repo    *git.Repository
-	gitDir  string
-	workDir string
-	mailmap *mailmap.Mailmap
+	repo                *git.Repository
+	gitDir              string
+	workDir             string
+	mailmap             *mailmap.Mailmap
+	ecosystemFilter     config.EcosystemFilter
+	ecosystemFilterErr  error
+	ecosystemFilterOnce sync.Once
 }
 
 func OpenRepository(path string) (*Repository, error) {
@@ -98,7 +102,13 @@ func (r *Repository) WorkDir() string {
 }
 
 func (r *Repository) EcosystemFilter() (config.EcosystemFilter, error) {
-	return config.LoadEcosystemFilter(r.workDir)
+	r.ecosystemFilterOnce.Do(func() {
+		r.ecosystemFilter, r.ecosystemFilterErr = config.LoadEcosystemFilter(r.workDir)
+	})
+	if r.ecosystemFilterErr != nil {
+		return config.EcosystemFilter{}, r.ecosystemFilterErr
+	}
+	return r.ecosystemFilter, nil
 }
 
 func (r *Repository) Head() (*plumbing.Reference, error) {
