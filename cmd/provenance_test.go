@@ -157,8 +157,8 @@ func TestBuildProvenanceResultMissingFilter(t *testing.T) {
 			RegistrySignatures: 1,
 		},
 		"pkg:cargo/serde@1.0.0": {
-			Status: provenanceStatusUnsupported,
-			Error:  "unsupported",
+			Status:   provenanceStatusUnsupported,
+			Evidence: []string{"provenance lookup is only supported for npm, pypi, and rubygems"},
 		},
 	}
 
@@ -188,5 +188,25 @@ func TestBuildProvenanceResultMissingFilter(t *testing.T) {
 		if dep.TrustedPublishing {
 			t.Fatalf("trusted dependency should be filtered from --missing result: %#v", dep)
 		}
+		if dep.Status == string(provenanceStatusUnsupported) && dep.Error != "" {
+			t.Fatalf("unsupported dependency should not be reported as error: %#v", dep)
+		}
+	}
+}
+
+func TestLookupProvenanceUnsupportedUsesEvidence(t *testing.T) {
+	got := lookupProvenance(context.Background(), &fakeProvenanceHTTPClient{}, database.Dependency{
+		Name:        "serde",
+		Ecosystem:   "cargo",
+		Requirement: "1.0.0",
+	})
+	if got.Status != provenanceStatusUnsupported {
+		t.Fatalf("status = %q, want %q", got.Status, provenanceStatusUnsupported)
+	}
+	if got.Error != "" {
+		t.Fatalf("error = %q, want empty", got.Error)
+	}
+	if len(got.Evidence) == 0 {
+		t.Fatal("expected explanatory evidence for unsupported ecosystem")
 	}
 }

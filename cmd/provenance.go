@@ -256,8 +256,8 @@ func lookupProvenance(ctx context.Context, client provenanceHTTPClient, dep data
 		return lookupRubyGemsProvenance(ctx, client, dep)
 	default:
 		return provenanceLookupData{
-			Status: provenanceStatusUnsupported,
-			Error:  "provenance lookup is only supported for npm, pypi, and rubygems",
+			Status:   provenanceStatusUnsupported,
+			Evidence: []string{"provenance lookup is only supported for npm, pypi, and rubygems"},
 		}
 	}
 }
