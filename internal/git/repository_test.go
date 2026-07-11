@@ -198,6 +198,7 @@ func TestOpenRepository(t *testing.T) {
 }
 
 func TestDatabasePath(t *testing.T) {
+	t.Setenv("GIT_PKGS_DB", "")
 	repoDir := createTestRepo(t)
 	addFile(t, repoDir, "README.md", "# Test")
 	commit(t, repoDir, "Initial commit")
@@ -211,6 +212,22 @@ func TestDatabasePath(t *testing.T) {
 	if repo.DatabasePath() != expected {
 		t.Errorf("expected database path %s, got %s", expected, repo.DatabasePath())
 	}
+
+	t.Run("absolute environment override", func(t *testing.T) {
+		override := filepath.Join(t.TempDir(), "cache.sqlite3")
+		t.Setenv("GIT_PKGS_DB", override)
+		if repo.DatabasePath() != override {
+			t.Errorf("expected database path %s, got %s", override, repo.DatabasePath())
+		}
+	})
+
+	t.Run("relative environment override", func(t *testing.T) {
+		t.Setenv("GIT_PKGS_DB", filepath.Join(".cache", "pkgs.sqlite3"))
+		expected := filepath.Join(repoDir, ".cache", "pkgs.sqlite3")
+		if repo.DatabasePath() != expected {
+			t.Errorf("expected database path %s, got %s", expected, repo.DatabasePath())
+		}
+	})
 }
 
 func TestCurrentBranch(t *testing.T) {

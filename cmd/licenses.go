@@ -39,6 +39,7 @@ Licenses are normalized to SPDX identifiers when possible.`,
 	licensesCmd.Flags().Bool("unknown", false, "Flag packages with unknown licenses")
 	licensesCmd.Flags().Bool("group", false, "Group output by license")
 	licensesCmd.Flags().Bool("drift", false, "Detect dependencies whose license changed between installed and latest versions")
+	licensesCmd.Flags().Bool("offline", false, "Use cached metadata without making network requests")
 	parent.AddCommand(licensesCmd)
 }
 
@@ -92,6 +93,7 @@ func runLicenses(cmd *cobra.Command, args []string) error {
 	flagUnknown, _ := cmd.Flags().GetBool("unknown")
 	groupBy, _ := cmd.Flags().GetBool("group")
 	driftOnly, _ := cmd.Flags().GetBool("drift")
+	offline, _ := cmd.Flags().GetBool("offline")
 
 	if driftOnly {
 		if err := validateLicenseDriftFlags(allowList, denyList, flagPermissive, flagCopyleft, flagUnknown, groupBy); err != nil {
@@ -115,7 +117,7 @@ func runLicenses(cmd *cobra.Command, args []string) error {
 	deps = filterByEcosystem(deps, ecosystem)
 
 	if driftOnly {
-		return runLicenseDrift(cmd, db, deps, format)
+		return runLicenseDrift(cmd, db, deps, format, offline)
 	}
 
 	// Filter to manifest dependencies (direct deps)
@@ -149,7 +151,7 @@ func runLicenses(cmd *cobra.Command, args []string) error {
 	}
 
 	// Get license data (from cache or API)
-	packageData, err := getLicenseData(db, purls, purlToDep)
+	packageData, err := getLicenseData(db, purls, purlToDep, offline)
 	if err != nil {
 		return fmt.Errorf("looking up packages: %w", err)
 	}
@@ -326,13 +328,24 @@ type licenseData struct {
 	LatestVersion string
 }
 
-func getLicenseData(db *database.DB, purls []string, purlToDep map[string]database.Dependency) (map[string]*licenseData, error) {
+func getLicenseData(
+	db *database.DB,
+	purls []string,
+	purlToDep map[string]database.Dependency,
+	offline bool,
+) (map[string]*licenseData, error) {
 	result := make(map[string]*licenseData)
 	var uncachedPurls []string
 
 	// Check cache if DB is available
 	if db != nil {
-		cached, err := db.GetCachedPackages(purls, enrichmentCacheTTL)
+		var cached map[string]*database.CachedPackage
+		var err error
+		if offline {
+			cached, err = db.GetCachedPackagesIncludingStale(purls)
+		} else {
+			cached, err = db.GetCachedPackages(purls, enrichmentCacheTTL)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -353,6 +366,12 @@ func getLicenseData(db *database.DB, purls []string, purlToDep map[string]databa
 	} else {
 		uncachedPurls = purls
 	}
+	if offline && len(uncachedPurls) > 0 {
+		return nil, fmt.Errorf(
+			"offline mode: license metadata is not cached for %d package(s); run 'git pkgs licenses' without --offline to populate the cache",
+			len(uncachedPurls),
+		)
+	}
 
 	// Fetch uncached from API
 	if len(uncachedPurls) > 0 {
@@ -361,7 +380,7 @@ func getLicenseData(db *database.DB, purls []string, purlToDep map[string]databa
 			return nil, err
 		}
 
-		const licensesTimeout = 60 * time.Second
+		const licensesTimeout = 5 * time.Minute
 		ctx, cancel := context.WithTimeout(context.Background(), licensesTimeout)
 		defer cancel()
 
@@ -398,7 +417,7 @@ func getLicenseData(db *database.DB, purls []string, purlToDep map[string]databa
 	return result, nil
 }
 
-func runLicenseDrift(cmd *cobra.Command, db *database.DB, deps []database.Dependency, format string) error {
+func runLicenseDrift(cmd *cobra.Command, db *database.DB, deps []database.Dependency, format string, offline bool) error {
 	resolved := make([]database.Dependency, 0, len(deps))
 	for _, dep := range deps {
 		if isResolvedDependency(dep) {
@@ -415,7 +434,7 @@ func runLicenseDrift(cmd *cobra.Command, db *database.DB, deps []database.Depend
 		return nil
 	}
 
-	result, err := computeLicenseDrift(db, resolved)
+	result, err := computeLicenseDrift(db, resolved, offline)
 	if err != nil {
 		return err
 	}
@@ -431,7 +450,7 @@ func runLicenseDrift(cmd *cobra.Command, db *database.DB, deps []database.Depend
 	}
 }
 
-func computeLicenseDrift(db *database.DB, deps []database.Dependency) (*LicenseDriftResult, error) {
+func computeLicenseDrift(db *database.DB, deps []database.Dependency, offline bool) (*LicenseDriftResult, error) {
 	result := emptyLicenseDriftResult()
 	result.Summary.TotalDependencies = len(deps)
 
@@ -450,12 +469,12 @@ func computeLicenseDrift(db *database.DB, deps []database.Dependency) (*LicenseD
 		}
 	}
 
-	packageLicenses, err := getLicenseData(db, packagePURLs, purlToDep)
+	packageLicenses, err := getLicenseData(db, packagePURLs, purlToDep, offline)
 	if err != nil {
 		return nil, fmt.Errorf("looking up package licenses: %w", err)
 	}
 
-	versionLicenses, err := loadLicenseDriftVersionLicenses(db, deps)
+	versionLicenses, err := loadLicenseDriftVersionLicenses(db, deps, offline)
 	if err != nil {
 		return nil, fmt.Errorf("looking up version licenses: %w", err)
 	}
@@ -523,7 +542,7 @@ func licensePackagePURLForDependency(dep database.Dependency) string {
 	return purl.MakePURLString(dep.Ecosystem, dep.Name, "")
 }
 
-func loadLicenseDriftVersionLicenses(db *database.DB, deps []database.Dependency) (map[string]string, error) {
+func loadLicenseDriftVersionLicenses(db *database.DB, deps []database.Dependency, offline bool) (map[string]string, error) {
 	needed := make(map[string]map[string]bool)
 	for _, dep := range deps {
 		versionedPURL := versionedPURLForDependency(dep)
@@ -537,7 +556,7 @@ func loadLicenseDriftVersionLicenses(db *database.DB, deps []database.Dependency
 		needed[packagePURL][dep.Requirement] = true
 	}
 
-	result := cachedLicenseDriftVersionLicenses(db, needed)
+	result := cachedLicenseDriftVersionLicenses(db, needed, offline)
 	var missing []licenseDriftVersionLookup
 	for packagePURL, versions := range needed {
 		for version := range versions {
@@ -553,6 +572,12 @@ func loadLicenseDriftVersionLicenses(db *database.DB, deps []database.Dependency
 	}
 	if len(missing) == 0 {
 		return result, nil
+	}
+	if offline {
+		return nil, fmt.Errorf(
+			"offline mode: license metadata is not cached for %d package version(s); run 'git pkgs licenses --drift' without --offline to populate the cache",
+			len(missing),
+		)
 	}
 
 	client, err := newEnrichmentClient()
@@ -643,14 +668,24 @@ func fetchLicenseDriftVersions(
 	return fetched, fetchErrors
 }
 
-func cachedLicenseDriftVersionLicenses(db *database.DB, needed map[string]map[string]bool) map[string]string {
+func cachedLicenseDriftVersionLicenses(
+	db *database.DB,
+	needed map[string]map[string]bool,
+	includeStale bool,
+) map[string]string {
 	result := make(map[string]string)
 	if db == nil {
 		return result
 	}
 
 	for packagePURL := range needed {
-		cached, err := db.GetCachedVersions(packagePURL, enrichmentCacheTTL)
+		var cached []database.CachedVersion
+		var err error
+		if includeStale {
+			cached, err = db.GetCachedVersionsIncludingStale(packagePURL)
+		} else {
+			cached, err = db.GetCachedVersions(packagePURL, enrichmentCacheTTL)
+		}
 		if err != nil {
 			continue
 		}

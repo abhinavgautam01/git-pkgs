@@ -405,10 +405,12 @@ git pkgs licenses --permissive  # flag copyleft licenses
 git pkgs licenses --allow=MIT,Apache-2.0  # explicit allow list
 git pkgs licenses --group       # group output by license
 git pkgs licenses --drift       # detect installed-to-latest license changes
+git pkgs licenses --offline     # use cached metadata without network access
 ```
 
 Fetches license information from package registries. Exits with code 1 if violations are found, making it suitable for CI.
 Use `--drift` to compare resolved dependency versions with the latest package metadata and flag changes like MIT to GPL.
+Package and version metadata is cached for 24 hours in the git-pkgs database. `--offline` accepts cached metadata regardless of age and fails if required metadata has not been cached yet. Set `GIT_PKGS_DB` to persist the database outside `.git`, including across CI runs.
 
 ### Vulnerability scanning
 

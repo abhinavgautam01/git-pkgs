@@ -79,6 +79,12 @@ func OpenRepository(path string) (*Repository, error) {
 }
 
 func (r *Repository) DatabasePath() string {
+	if dbPath := os.Getenv("GIT_PKGS_DB"); dbPath != "" {
+		if filepath.IsAbs(dbPath) {
+			return filepath.Clean(dbPath)
+		}
+		return filepath.Join(r.workDir, dbPath)
+	}
 	return filepath.Join(r.gitDir, DatabaseFile)
 }
 

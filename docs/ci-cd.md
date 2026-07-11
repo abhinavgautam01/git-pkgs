@@ -296,6 +296,29 @@ Cache the git-pkgs binary to speed up workflows:
           fi
 ```
 
+Cache the SQLite database to reuse enrichment metadata, including licenses, across workflow runs. A unique primary key lets each run save refreshed data, while the restore key selects the newest earlier cache:
+
+```yaml
+env:
+  GIT_PKGS_DB: ${{ runner.temp }}/git-pkgs.sqlite3
+
+steps:
+  - uses: actions/checkout@v4
+
+  - name: Restore git-pkgs metadata cache
+    uses: actions/cache@v4
+    with:
+      path: ${{ env.GIT_PKGS_DB }}
+      key: git-pkgs-metadata-${{ runner.os }}-${{ github.run_id }}
+      restore-keys: |
+        git-pkgs-metadata-${{ runner.os }}-
+
+  - name: Check dependency licenses
+    run: git pkgs licenses --allow=MIT,Apache-2.0,BSD-2-Clause,BSD-3-Clause,ISC
+```
+
+Use `git pkgs licenses --offline` after a cache has been populated when the check must make no network requests. The command fails if metadata for a required dependency is missing from the restored cache.
+
 ## Docker
 
 Use git-pkgs in a Dockerfile:
