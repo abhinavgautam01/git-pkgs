@@ -166,6 +166,7 @@ func TestIntegrityCommand(t *testing.T) {
 			t.Fatalf("init failed: %v", err)
 		}
 
+		publishedAt := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
 		db, err := database.Open(filepath.Join(repoDir, ".git", "pkgs.sqlite3"))
 		if err != nil {
 			t.Fatalf("open database: %v", err)
@@ -173,6 +174,8 @@ func TestIntegrityCommand(t *testing.T) {
 		if err := db.SaveVersions([]database.CachedVersion{{
 			PURL:        "pkg:npm/express@4.18.2",
 			PackagePURL: "pkg:npm/express",
+			License:     "MIT",
+			PublishedAt: publishedAt,
 			Integrity:   "sha512-5/PsL6iGPdfQ/lKM1UuielYgv3BUoJfz1aUwU9vHZ+J7gyvwdQXFEBIEIaxeGf0GIcreATNyBExtalisDbuMqQ==",
 		}}); err != nil {
 			_ = db.Close()
@@ -212,10 +215,22 @@ func TestIntegrityCommand(t *testing.T) {
 		if err := db.SaveVersions([]database.CachedVersion{{
 			PURL:        "pkg:npm/express@4.18.2",
 			PackagePURL: "pkg:npm/express",
-			PublishedAt: time.Now(),
 		}}); err != nil {
 			_ = db.Close()
 			t.Fatalf("update cached version without integrity: %v", err)
+		}
+		versions, err := db.GetCachedVersions("pkg:npm/express", 24*time.Hour)
+		if err != nil {
+			_ = db.Close()
+			t.Fatalf("read cached version: %v", err)
+		}
+		if len(versions) != 1 {
+			_ = db.Close()
+			t.Fatalf("cached version count = %d, want 1", len(versions))
+		}
+		if got := versions[0]; got.License != "MIT" || !got.PublishedAt.Equal(publishedAt) || got.Integrity == "" {
+			_ = db.Close()
+			t.Fatalf("partial version update lost cached fields: %+v", got)
 		}
 		if err := db.Close(); err != nil {
 			t.Fatalf("close database: %v", err)

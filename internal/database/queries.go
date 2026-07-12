@@ -2380,8 +2380,8 @@ func (db *DB) SaveVersions(versions []CachedVersion) error {
 		INSERT INTO versions (purl, package_purl, license, published_at, integrity, status, status_checked_at, metadata, enriched_at, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(purl) DO UPDATE SET
-			license = excluded.license,
-			published_at = excluded.published_at,
+			license = CASE WHEN excluded.license != '' THEN excluded.license ELSE versions.license END,
+			published_at = CASE WHEN excluded.published_at != '' THEN excluded.published_at ELSE versions.published_at END,
 			integrity = CASE WHEN excluded.integrity != '' THEN excluded.integrity ELSE versions.integrity END,
 			status = CASE WHEN excluded.status_checked_at != '' THEN excluded.status ELSE versions.status END,
 			status_checked_at = CASE WHEN excluded.status_checked_at != '' THEN excluded.status_checked_at ELSE versions.status_checked_at END,

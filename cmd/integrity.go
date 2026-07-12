@@ -276,10 +276,7 @@ func runRegistryCheck(cmd *cobra.Command, db *database.DB, deps []database.Depen
 	}
 
 	versionedPURLs, invalidPURLs := registryCheckPURLs(lockfileDeps)
-	registryHashes, err := cachedRegistryIntegrities(db, versionedPURLs)
-	if err != nil {
-		return fmt.Errorf("loading cached registry integrity: %w", err)
-	}
+	registryHashes := cachedRegistryIntegrities(db, versionedPURLs)
 
 	checked := len(registryHashes)
 	skipped := invalidPURLs
@@ -370,10 +367,10 @@ func registryCheckPURLs(deps []database.Dependency) ([]string, int) {
 	return versionedPURLs, invalid
 }
 
-func cachedRegistryIntegrities(db *database.DB, versionedPURLs []string) (map[string]string, error) {
+func cachedRegistryIntegrities(db *database.DB, versionedPURLs []string) map[string]string {
 	result := make(map[string]string)
 	if db == nil {
-		return result, nil
+		return result
 	}
 	wanted := make(map[string]bool, len(versionedPURLs))
 	for _, purlStr := range versionedPURLs {
@@ -383,7 +380,7 @@ func cachedRegistryIntegrities(db *database.DB, versionedPURLs []string) (map[st
 	for _, packagePURL := range uniquePackagePURLs(versionedPURLs) {
 		versions, err := db.GetCachedVersions(packagePURL, enrichmentCacheTTL)
 		if err != nil {
-			return nil, err
+			continue
 		}
 		for _, version := range versions {
 			if wanted[version.PURL] && version.Integrity != "" {
@@ -391,7 +388,7 @@ func cachedRegistryIntegrities(db *database.DB, versionedPURLs []string) (map[st
 			}
 		}
 	}
-	return result, nil
+	return result
 }
 
 func missingRegistryIntegrityPURLs(versionedPURLs []string, cached map[string]string) []string {
