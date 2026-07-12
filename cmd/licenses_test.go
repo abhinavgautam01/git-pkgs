@@ -94,6 +94,8 @@ gem 'rails'
 `
 
 func TestLicensesCommand(t *testing.T) {
+	t.Setenv("GIT_PKGS_DB", "")
+
 	t.Run("permissive flag detects non-permissive licenses", func(t *testing.T) {
 		restore := setMockEnrichment(map[string]*enrichment.PackageInfo{
 			"pkg:gem/sidekiq": {Ecosystem: "rubygems", Name: "sidekiq", License: "LGPL-3.0-or-later"},
