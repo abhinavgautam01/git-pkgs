@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/git-pkgs/enrichment"
 	"github.com/git-pkgs/git-pkgs/cmd"
+	"github.com/git-pkgs/git-pkgs/internal/database"
 	"github.com/git-pkgs/spdx"
 )
 
@@ -21,11 +24,13 @@ type mockEnrichmentClient struct {
 	versionInfos     map[string]*enrichment.VersionInfo
 	getVersionsCalls int
 	getVersionCalls  int
+	bulkLookupCalls  int
 }
 
 func (m *mockEnrichmentClient) BulkLookup(_ context.Context, purls []string) (map[string]*enrichment.PackageInfo, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.bulkLookupCalls++
 
 	result := make(map[string]*enrichment.PackageInfo)
 	for _, p := range purls {
@@ -89,6 +94,8 @@ gem 'rails'
 `
 
 func TestLicensesCommand(t *testing.T) {
+	t.Setenv("GIT_PKGS_DB", "")
+
 	t.Run("permissive flag detects non-permissive licenses", func(t *testing.T) {
 		restore := setMockEnrichment(map[string]*enrichment.PackageInfo{
 			"pkg:gem/sidekiq": {Ecosystem: "rubygems", Name: "sidekiq", License: "LGPL-3.0-or-later"},
@@ -286,6 +293,153 @@ func TestLicensesCommand(t *testing.T) {
 		}
 	})
 
+	t.Run("offline uses stale cached metadata without a network request", func(t *testing.T) {
+		mock, restore := setMockEnrichmentClient(&mockEnrichmentClient{packages: map[string]*enrichment.PackageInfo{
+			"pkg:npm/express": {Ecosystem: "npm", Name: "express", License: "MIT"},
+			"pkg:npm/lodash":  {Ecosystem: "npm", Name: "lodash", License: "BSD-3-Clause"},
+			"pkg:npm/jest":    {Ecosystem: "npm", Name: "jest", License: "MIT"},
+		}})
+		defer restore()
+
+		repoDir := createTestRepo(t)
+		addFileAndCommit(t, repoDir, "package.json", packageJSON, "Add package.json")
+
+		cleanup := chdir(t, repoDir)
+		defer cleanup()
+
+		rootCmd := cmd.NewRootCmd()
+		rootCmd.SetArgs([]string{"init"})
+		if err := rootCmd.Execute(); err != nil {
+			t.Fatalf("init failed: %v", err)
+		}
+
+		rootCmd = cmd.NewRootCmd()
+		rootCmd.SetArgs([]string{"licenses"})
+		if err := rootCmd.Execute(); err != nil {
+			t.Fatalf("initial licenses lookup failed: %v", err)
+		}
+
+		db, err := database.Open(filepath.Join(repoDir, ".git", "pkgs.sqlite3"))
+		if err != nil {
+			t.Fatalf("open database: %v", err)
+		}
+		staleAt := time.Now().Add(-48 * time.Hour).Format(time.RFC3339)
+		if _, err := db.Exec("UPDATE packages SET enriched_at = ?", staleAt); err != nil {
+			_ = db.Close()
+			t.Fatalf("make cache stale: %v", err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatalf("close database: %v", err)
+		}
+
+		mock.mu.Lock()
+		mock.bulkLookupCalls = 0
+		mock.mu.Unlock()
+
+		var stdout bytes.Buffer
+		rootCmd = cmd.NewRootCmd()
+		rootCmd.SetArgs([]string{"licenses", "--offline"})
+		rootCmd.SetOut(&stdout)
+		if err := rootCmd.Execute(); err != nil {
+			t.Fatalf("offline licenses failed: %v", err)
+		}
+		if !strings.Contains(stdout.String(), "MIT") || !strings.Contains(stdout.String(), "BSD-3-Clause") {
+			t.Fatalf("offline output did not use cached licenses: %s", stdout.String())
+		}
+
+		mock.mu.Lock()
+		calls := mock.bulkLookupCalls
+		mock.mu.Unlock()
+		if calls != 0 {
+			t.Fatalf("offline lookup made %d network call(s), want 0", calls)
+		}
+	})
+
+	t.Run("offline fails when metadata is not cached", func(t *testing.T) {
+		mock, restore := setMockEnrichmentClient(&mockEnrichmentClient{packages: map[string]*enrichment.PackageInfo{}})
+		defer restore()
+
+		repoDir := createTestRepo(t)
+		addFileAndCommit(t, repoDir, "package.json", packageJSON, "Add package.json")
+
+		cleanup := chdir(t, repoDir)
+		defer cleanup()
+
+		rootCmd := cmd.NewRootCmd()
+		rootCmd.SetArgs([]string{"init"})
+		if err := rootCmd.Execute(); err != nil {
+			t.Fatalf("init failed: %v", err)
+		}
+
+		rootCmd = cmd.NewRootCmd()
+		rootCmd.SetArgs([]string{"licenses", "--offline"})
+		err := rootCmd.Execute()
+		if err == nil {
+			t.Fatal("expected offline lookup without cached metadata to fail")
+		}
+		if !strings.Contains(err.Error(), "license metadata is not cached") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		mock.mu.Lock()
+		calls := mock.bulkLookupCalls
+		mock.mu.Unlock()
+		if calls != 0 {
+			t.Fatalf("offline lookup made %d network call(s), want 0", calls)
+		}
+	})
+
+	t.Run("offline treats funding-only cache rows as missing license metadata", func(t *testing.T) {
+		mock, restore := setMockEnrichmentClient(&mockEnrichmentClient{packages: map[string]*enrichment.PackageInfo{}})
+		defer restore()
+
+		repoDir := createTestRepo(t)
+		addFileAndCommit(t, repoDir, "package.json", `{"dependencies":{"express":"^4.18.0"}}`, "Add package.json")
+
+		cleanup := chdir(t, repoDir)
+		defer cleanup()
+
+		rootCmd := cmd.NewRootCmd()
+		rootCmd.SetArgs([]string{"init"})
+		if err := rootCmd.Execute(); err != nil {
+			t.Fatalf("init failed: %v", err)
+		}
+
+		db, err := database.Open(filepath.Join(repoDir, ".git", "pkgs.sqlite3"))
+		if err != nil {
+			t.Fatalf("open database: %v", err)
+		}
+		if err := db.SavePackageFundingBatch([]database.PackageFundingData{{
+			PURL:         "pkg:npm/express",
+			Ecosystem:    "npm",
+			Name:         "express",
+			FundingLinks: []string{"https://opencollective.com/express"},
+		}}); err != nil {
+			_ = db.Close()
+			t.Fatalf("save funding metadata: %v", err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatalf("close database: %v", err)
+		}
+
+		rootCmd = cmd.NewRootCmd()
+		rootCmd.SetArgs([]string{"licenses", "--offline"})
+		err = rootCmd.Execute()
+		if err == nil {
+			t.Fatal("expected offline lookup with funding-only cache metadata to fail")
+		}
+		if !strings.Contains(err.Error(), "license metadata is not cached") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		mock.mu.Lock()
+		calls := mock.bulkLookupCalls
+		mock.mu.Unlock()
+		if calls != 0 {
+			t.Fatalf("offline lookup made %d network call(s), want 0", calls)
+		}
+	})
+
 	t.Run("drift flag reports installed version license changes", func(t *testing.T) {
 		mock, restore := setMockEnrichmentWithVersionInfos(
 			map[string]*enrichment.PackageInfo{
@@ -350,6 +504,46 @@ func TestLicensesCommand(t *testing.T) {
 		}
 		if getVersionsCalls != 0 {
 			t.Fatalf("GetVersions calls = %d, want 0", getVersionsCalls)
+		}
+
+		db, err := database.Open(filepath.Join(repoDir, ".git", "pkgs.sqlite3"))
+		if err != nil {
+			t.Fatalf("open database: %v", err)
+		}
+		staleAt := time.Now().Add(-48 * time.Hour).Format(time.RFC3339)
+		if _, err := db.Exec("UPDATE packages SET enriched_at = ?", staleAt); err != nil {
+			_ = db.Close()
+			t.Fatalf("make package cache stale: %v", err)
+		}
+		if _, err := db.Exec("UPDATE versions SET enriched_at = ?", staleAt); err != nil {
+			_ = db.Close()
+			t.Fatalf("make version cache stale: %v", err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatalf("close database: %v", err)
+		}
+
+		mock.mu.Lock()
+		mock.bulkLookupCalls = 0
+		mock.getVersionCalls = 0
+		mock.mu.Unlock()
+
+		stdout.Reset()
+		stderr.Reset()
+		rootCmd = cmd.NewRootCmd()
+		rootCmd.SetArgs([]string{"licenses", "--drift", "--offline", "--format", "json"})
+		rootCmd.SetOut(&stdout)
+		rootCmd.SetErr(&stderr)
+		if err := rootCmd.Execute(); err != nil {
+			t.Fatalf("offline license drift failed: %v\nstderr: %s", err, stderr.String())
+		}
+
+		mock.mu.Lock()
+		bulkLookupCalls := mock.bulkLookupCalls
+		getVersionCalls = mock.getVersionCalls
+		mock.mu.Unlock()
+		if bulkLookupCalls != 0 || getVersionCalls != 0 {
+			t.Fatalf("offline drift made network calls: BulkLookup=%d GetVersion=%d", bulkLookupCalls, getVersionCalls)
 		}
 	})
 

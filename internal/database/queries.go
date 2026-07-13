@@ -1800,11 +1800,20 @@ type CachedVersion struct {
 
 // GetCachedPackages returns cached package data for the given PURLs that aren't stale.
 func (db *DB) GetCachedPackages(purls []string, staleDuration time.Duration) (map[string]*CachedPackage, error) {
+	staleThreshold := time.Now().Add(-staleDuration)
+	return db.getCachedPackages(purls, &staleThreshold)
+}
+
+// GetCachedPackagesIncludingStale returns cached package data regardless of age.
+func (db *DB) GetCachedPackagesIncludingStale(purls []string) (map[string]*CachedPackage, error) {
+	return db.getCachedPackages(purls, nil)
+}
+
+func (db *DB) getCachedPackages(purls []string, staleThreshold *time.Time) (map[string]*CachedPackage, error) {
 	if len(purls) == 0 {
 		return make(map[string]*CachedPackage), nil
 	}
 
-	staleThreshold := time.Now().Add(-staleDuration)
 	result := make(map[string]*CachedPackage)
 
 	// Process in batches to avoid SQLite parameter limits
@@ -1817,16 +1826,20 @@ func (db *DB) GetCachedPackages(purls []string, staleDuration time.Duration) (ma
 		batch := purls[i:end]
 
 		placeholders := make([]string, len(batch))
-		args := make([]interface{}, len(batch)+1)
-		args[0] = staleThreshold.Format(time.RFC3339)
+		args := make([]interface{}, 0, len(batch)+1)
+		freshnessFilter := ""
 		for j, purl := range batch {
 			placeholders[j] = "?"
-			args[j+1] = purl
+			args = append(args, purl)
+		}
+		if staleThreshold != nil {
+			freshnessFilter = " AND enriched_at >= ?"
+			args = append(args, staleThreshold.Format(time.RFC3339))
 		}
 
 		query := `SELECT purl, ecosystem, name, latest_version, license, enriched_at
 			FROM packages
-			WHERE enriched_at >= ? AND purl IN (` + strings.Join(placeholders, ",") + `)`
+			WHERE enriched_at IS NOT NULL AND purl IN (` + strings.Join(placeholders, ",") + `)` + freshnessFilter
 
 		rows, err := db.Query(query, args...)
 		if err != nil {
@@ -2294,13 +2307,27 @@ func (db *DB) SavePackageHealthBatch(packages []PackageHealthData) error {
 // GetCachedVersions returns cached version data for a package that isn't stale.
 func (db *DB) GetCachedVersions(packagePurl string, staleDuration time.Duration) ([]CachedVersion, error) {
 	staleThreshold := time.Now().Add(-staleDuration)
+	return db.getCachedVersions(packagePurl, &staleThreshold)
+}
 
-	rows, err := db.Query(`
+// GetCachedVersionsIncludingStale returns cached version data regardless of age.
+func (db *DB) GetCachedVersionsIncludingStale(packagePurl string) ([]CachedVersion, error) {
+	return db.getCachedVersions(packagePurl, nil)
+}
+
+func (db *DB) getCachedVersions(packagePurl string, staleThreshold *time.Time) ([]CachedVersion, error) {
+	query := `
 		SELECT purl, package_purl, license, published_at, status, status_checked_at, metadata
 		FROM versions
-		WHERE package_purl = ? AND enriched_at >= ?
-		ORDER BY published_at DESC`,
-		packagePurl, staleThreshold.Format(time.RFC3339))
+		WHERE package_purl = ?`
+	args := []interface{}{packagePurl}
+	if staleThreshold != nil {
+		query += " AND enriched_at >= ?"
+		args = append(args, staleThreshold.Format(time.RFC3339))
+	}
+	query += " ORDER BY published_at DESC"
+
+	rows, err := db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
