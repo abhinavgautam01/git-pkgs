@@ -13,7 +13,9 @@ import (
 
 	"github.com/git-pkgs/git-pkgs/internal/database"
 	"github.com/git-pkgs/purl"
+	"github.com/git-pkgs/sarif"
 	"github.com/git-pkgs/vulns"
+	"github.com/spf13/cobra"
 )
 
 // mockSource implements vulns.Source for testing.
@@ -370,6 +372,78 @@ func TestBuildVersRange(t *testing.T) {
 				t.Errorf("buildVersRange() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestOutputVulnsSARIF(t *testing.T) {
+	var buf bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&buf)
+
+	results := []VulnResult{
+		{
+			ID:           "GHSA-0001",
+			Summary:      "Example vulnerability",
+			Severity:     "high",
+			Package:      "lodash",
+			Version:      "4.17.20",
+			ManifestPath: "package-lock.json",
+		},
+		{
+			ID:           "GHSA-0002",
+			Summary:      "Another vulnerability",
+			Severity:     "medium",
+			Package:      "express",
+			Version:      "4.18.1",
+			ManifestPath: "package-lock.json",
+		},
+	}
+
+	if err := outputVulnsSARIF(cmd, results); err != nil {
+		t.Fatalf("outputVulnsSARIF() error = %v", err)
+	}
+
+	log, err := sarif.Parse(buf.Bytes())
+	if err != nil {
+		t.Fatalf("sarif.Parse() error = %v\n%s", err, buf.String())
+	}
+	if err := sarif.Validate(log); err != nil {
+		t.Fatalf("sarif.Validate() error = %v\n%s", err, buf.String())
+	}
+	if log.Version != "2.1.0" {
+		t.Fatalf("Version = %q, want 2.1.0", log.Version)
+	}
+	if got := log.Runs[0].Tool.Driver.Name; got != "git-pkgs" {
+		t.Fatalf("Tool.Driver.Name = %q, want git-pkgs", got)
+	}
+	if got := log.Runs[0].Tool.Driver.Rules[0].ID; got != "GHSA-0001" {
+		t.Fatalf("rule ID = %q, want GHSA-0001", got)
+	}
+	if got := log.Runs[0].Tool.Driver.Rules[1].ID; got != "GHSA-0002" {
+		t.Fatalf("second rule ID = %q, want GHSA-0002", got)
+	}
+	if got := log.Runs[0].Results[0].Level; got != "error" {
+		t.Fatalf("result level = %q, want error", got)
+	}
+	if got := log.Runs[0].Results[1].Level; got != "warning" {
+		t.Fatalf("second result level = %q, want warning", got)
+	}
+	if got := log.Runs[0].Results[0].Locations[0].PhysicalLocation.ArtifactLocation.URI; got != "package-lock.json" {
+		t.Fatalf("location URI = %q, want package-lock.json", got)
+	}
+	for i, result := range log.Runs[0].Results {
+		if result.RuleIndex != -1 || result.Rank != -1 {
+			t.Fatalf("result %d lost constructor defaults: ruleIndex=%d rank=%v", i, result.RuleIndex, result.Rank)
+		}
+		location := result.Locations[0]
+		if location.ID != -1 || location.PhysicalLocation.ArtifactLocation.Index != -1 {
+			t.Fatalf(
+				"result %d location lost constructor defaults: id=%d artifactIndex=%d",
+				i,
+				location.ID,
+				location.PhysicalLocation.ArtifactLocation.Index,
+			)
+		}
 	}
 }
 

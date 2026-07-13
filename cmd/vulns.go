@@ -14,6 +14,7 @@ import (
 	"github.com/git-pkgs/git-pkgs/internal/database"
 	"github.com/git-pkgs/git-pkgs/internal/git"
 	"github.com/git-pkgs/purl"
+	"github.com/git-pkgs/sarif"
 	"github.com/git-pkgs/vers"
 	"github.com/git-pkgs/vulns"
 	"github.com/git-pkgs/vulns/osv"
@@ -652,89 +653,24 @@ func outputVulnsText(cmd *cobra.Command, results []VulnResult) {
 	}
 }
 
-// SARIF output for integration with CI/CD tools
-type SARIFReport struct {
-	Schema  string     `json:"$schema"`
-	Version string     `json:"version"`
-	Runs    []SARIFRun `json:"runs"`
-}
-
-type SARIFRun struct {
-	Tool    SARIFTool     `json:"tool"`
-	Results []SARIFResult `json:"results"`
-}
-
-type SARIFTool struct {
-	Driver SARIFDriver `json:"driver"`
-}
-
-type SARIFDriver struct {
-	Name           string      `json:"name"`
-	Version        string      `json:"version"`
-	InformationURI string      `json:"informationUri"`
-	Rules          []SARIFRule `json:"rules"`
-}
-
-type SARIFRule struct {
-	ID               string         `json:"id"`
-	ShortDescription SARIFMessage   `json:"shortDescription"`
-	FullDescription  SARIFMessage   `json:"fullDescription,omitempty"`
-	Help             SARIFMessage   `json:"help,omitempty"`
-	Properties       map[string]any `json:"properties,omitempty"`
-}
-
-type SARIFResult struct {
-	RuleID    string          `json:"ruleId"`
-	Level     string          `json:"level"`
-	Message   SARIFMessage    `json:"message"`
-	Locations []SARIFLocation `json:"locations,omitempty"`
-}
-
-type SARIFMessage struct {
-	Text string `json:"text"`
-}
-
-type SARIFLocation struct {
-	PhysicalLocation SARIFPhysicalLocation `json:"physicalLocation"`
-}
-
-type SARIFPhysicalLocation struct {
-	ArtifactLocation SARIFArtifactLocation `json:"artifactLocation"`
-}
-
-type SARIFArtifactLocation struct {
-	URI string `json:"uri"`
-}
-
 func outputVulnsSARIF(cmd *cobra.Command, results []VulnResult) error {
-	report := SARIFReport{
-		Schema:  "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
-		Version: "2.1.0",
-		Runs: []SARIFRun{
-			{
-				Tool: SARIFTool{
-					Driver: SARIFDriver{
-						Name:           "git-pkgs",
-						Version:        "1.0.0",
-						InformationURI: "https://github.com/git-pkgs/git-pkgs",
-					},
-				},
-			},
-		},
-	}
+	driver := sarif.NewToolComponent()
+	driver.Name = "git-pkgs"
+	driver.Version = version
+	driver.InformationURI = "https://github.com/git-pkgs/git-pkgs"
 
 	ruleMap := make(map[string]bool)
+	run := sarif.NewRun()
 	for _, r := range results {
 		if !ruleMap[r.ID] {
 			ruleMap[r.ID] = true
-			rule := SARIFRule{
-				ID:               r.ID,
-				ShortDescription: SARIFMessage{Text: r.Summary},
-				Properties: map[string]any{
-					"security-severity": severityToScore(r.Severity),
-				},
+			rule := sarif.NewReportingDescriptor()
+			rule.ID = r.ID
+			rule.ShortDescription = sarif.MultiformatMessageString{Text: r.Summary}
+			rule.Properties = sarif.PropertyBag{
+				"security-severity": severityToScore(r.Severity),
 			}
-			report.Runs[0].Tool.Driver.Rules = append(report.Runs[0].Tool.Driver.Rules, rule)
+			driver.Rules = append(driver.Rules, rule)
 		}
 
 		level := "warning"
@@ -742,19 +678,25 @@ func outputVulnsSARIF(cmd *cobra.Command, results []VulnResult) error {
 			level = "error"
 		}
 
-		result := SARIFResult{
-			RuleID:  r.ID,
-			Level:   level,
-			Message: SARIFMessage{Text: fmt.Sprintf("%s@%s is vulnerable", r.Package, r.Version)},
-			Locations: []SARIFLocation{
-				{
-					PhysicalLocation: SARIFPhysicalLocation{
-						ArtifactLocation: SARIFArtifactLocation{URI: r.ManifestPath},
-					},
-				},
-			},
-		}
-		report.Runs[0].Results = append(report.Runs[0].Results, result)
+		artifactLocation := sarif.NewArtifactLocation()
+		artifactLocation.URI = r.ManifestPath
+		location := sarif.NewLocation()
+		location.PhysicalLocation = sarif.PhysicalLocation{ArtifactLocation: artifactLocation}
+		result := sarif.NewResult()
+		result.RuleID = r.ID
+		result.Level = level
+		result.Message = sarif.Message{Text: fmt.Sprintf("%s@%s is vulnerable", r.Package, r.Version)}
+		result.Locations = []sarif.Location{location}
+		run.Results = append(run.Results, result)
+	}
+
+	tool := sarif.NewTool()
+	tool.Driver = driver
+	run.Tool = tool
+	report := sarif.Log{
+		SchemaURI: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+		Version:   "2.1.0",
+		Runs:      []sarif.Run{run},
 	}
 
 	enc := json.NewEncoder(cmd.OutOrStdout())
