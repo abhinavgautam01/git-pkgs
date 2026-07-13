@@ -1839,7 +1839,7 @@ func (db *DB) getCachedPackages(purls []string, staleThreshold *time.Time) (map[
 
 		query := `SELECT purl, ecosystem, name, latest_version, license, enriched_at
 			FROM packages
-			WHERE purl IN (` + strings.Join(placeholders, ",") + `)` + freshnessFilter
+			WHERE enriched_at IS NOT NULL AND purl IN (` + strings.Join(placeholders, ",") + `)` + freshnessFilter
 
 		rows, err := db.Query(query, args...)
 		if err != nil {

@@ -389,6 +389,57 @@ func TestLicensesCommand(t *testing.T) {
 		}
 	})
 
+	t.Run("offline treats funding-only cache rows as missing license metadata", func(t *testing.T) {
+		mock, restore := setMockEnrichmentClient(&mockEnrichmentClient{packages: map[string]*enrichment.PackageInfo{}})
+		defer restore()
+
+		repoDir := createTestRepo(t)
+		addFileAndCommit(t, repoDir, "package.json", `{"dependencies":{"express":"^4.18.0"}}`, "Add package.json")
+
+		cleanup := chdir(t, repoDir)
+		defer cleanup()
+
+		rootCmd := cmd.NewRootCmd()
+		rootCmd.SetArgs([]string{"init"})
+		if err := rootCmd.Execute(); err != nil {
+			t.Fatalf("init failed: %v", err)
+		}
+
+		db, err := database.Open(filepath.Join(repoDir, ".git", "pkgs.sqlite3"))
+		if err != nil {
+			t.Fatalf("open database: %v", err)
+		}
+		if err := db.SavePackageFundingBatch([]database.PackageFundingData{{
+			PURL:         "pkg:npm/express",
+			Ecosystem:    "npm",
+			Name:         "express",
+			FundingLinks: []string{"https://opencollective.com/express"},
+		}}); err != nil {
+			_ = db.Close()
+			t.Fatalf("save funding metadata: %v", err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatalf("close database: %v", err)
+		}
+
+		rootCmd = cmd.NewRootCmd()
+		rootCmd.SetArgs([]string{"licenses", "--offline"})
+		err = rootCmd.Execute()
+		if err == nil {
+			t.Fatal("expected offline lookup with funding-only cache metadata to fail")
+		}
+		if !strings.Contains(err.Error(), "license metadata is not cached") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		mock.mu.Lock()
+		calls := mock.bulkLookupCalls
+		mock.mu.Unlock()
+		if calls != 0 {
+			t.Fatalf("offline lookup made %d network call(s), want 0", calls)
+		}
+	})
+
 	t.Run("drift flag reports installed version license changes", func(t *testing.T) {
 		mock, restore := setMockEnrichmentWithVersionInfos(
 			map[string]*enrichment.PackageInfo{

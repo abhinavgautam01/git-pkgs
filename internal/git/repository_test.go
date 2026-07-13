@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/git-pkgs/git-pkgs/internal/database"
 	"github.com/git-pkgs/git-pkgs/internal/git"
 )
 
@@ -226,6 +227,44 @@ func TestDatabasePath(t *testing.T) {
 		expected := filepath.Join(repoDir, ".cache", "pkgs.sqlite3")
 		if repo.DatabasePath() != expected {
 			t.Errorf("expected database path %s, got %s", expected, repo.DatabasePath())
+		}
+	})
+
+	t.Run("creates database in missing custom directory", func(t *testing.T) {
+		t.Setenv("GIT_PKGS_DB", filepath.Join(".cache", "git-pkgs", "pkgs.sqlite3"))
+		dbPath := repo.DatabasePath()
+		if _, err := os.Stat(filepath.Dir(dbPath)); !os.IsNotExist(err) {
+			t.Fatalf("expected custom database directory to be absent, got %v", err)
+		}
+
+		db, err := database.Create(dbPath)
+		if err != nil {
+			t.Fatalf("create database in custom directory: %v", err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatalf("close database: %v", err)
+		}
+		if _, err := os.Stat(dbPath); err != nil {
+			t.Fatalf("expected custom database to exist: %v", err)
+		}
+	})
+
+	t.Run("opens database in missing custom directory", func(t *testing.T) {
+		t.Setenv("GIT_PKGS_DB", filepath.Join(".cache", "on-demand", "pkgs.sqlite3"))
+		dbPath := repo.DatabasePath()
+		db, existed, err := database.OpenOrCreate(dbPath)
+		if err != nil {
+			t.Fatalf("open database in custom directory: %v", err)
+		}
+		if existed {
+			_ = db.Close()
+			t.Fatal("new custom database unexpectedly existed")
+		}
+		if err := db.Close(); err != nil {
+			t.Fatalf("close database: %v", err)
+		}
+		if _, err := os.Stat(dbPath); err != nil {
+			t.Fatalf("expected on-demand custom database to exist: %v", err)
 		}
 	})
 }

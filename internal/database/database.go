@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	_ "modernc.org/sqlite"
 )
@@ -21,6 +22,10 @@ func Exists(path string) bool {
 }
 
 func Create(path string) (*DB, error) {
+	if err := ensureParentDir(path); err != nil {
+		return nil, err
+	}
+
 	if Exists(path) {
 		if err := os.Remove(path); err != nil {
 			return nil, fmt.Errorf("removing existing database: %w", err)
@@ -47,6 +52,9 @@ func OpenOrCreate(path string) (*DB, bool, error) {
 		db, err := Open(path)
 		return db, true, err
 	}
+	if err := ensureParentDir(path); err != nil {
+		return nil, false, err
+	}
 
 	db, err := Open(path)
 	if err != nil {
@@ -59,6 +67,13 @@ func OpenOrCreate(path string) (*DB, bool, error) {
 	}
 
 	return db, false, nil
+}
+
+func ensureParentDir(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return fmt.Errorf("creating database directory: %w", err)
+	}
+	return nil
 }
 
 func Open(path string) (*DB, error) {
