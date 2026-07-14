@@ -3,18 +3,14 @@ package cmd
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"net/url"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/git-pkgs/git-pkgs/internal/database"
 	"github.com/git-pkgs/git-pkgs/internal/git"
+	"github.com/git-pkgs/git-pkgs/internal/provenance"
 	"github.com/git-pkgs/purl"
 	"github.com/spf13/cobra"
 )
@@ -22,23 +18,13 @@ import (
 const provenanceLookupTimeout = 5 * time.Minute
 const provenanceLookupConcurrency = 8
 
-type provenanceStatus string
-
 const (
-	provenanceStatusTrustedPublishing provenanceStatus = "trusted_publishing"
-	provenanceStatusSigned            provenanceStatus = "signed"
-	provenanceStatusMissing           provenanceStatus = "missing"
-	provenanceStatusUnsupported       provenanceStatus = "unsupported"
-	provenanceStatusError             provenanceStatus = "error"
+	provenanceStatusTrustedPublishing = provenance.StatusTrustedPublishing
+	provenanceStatusSigned            = provenance.StatusSigned
+	provenanceStatusMissing           = provenance.StatusMissing
+	provenanceStatusUnsupported       = provenance.StatusUnsupported
+	provenanceStatusError             = provenance.StatusError
 )
-
-type provenanceHTTPClient interface {
-	Do(req *http.Request) (*http.Response, error)
-}
-
-var newProvenanceHTTPClient = func() provenanceHTTPClient {
-	return &http.Client{Timeout: 30 * time.Second}
-}
 
 func addProvenanceCmd(parent *cobra.Command) {
 	provenanceCmd := &cobra.Command{
@@ -89,19 +75,16 @@ type ProvenanceResult struct {
 	Dependencies []ProvenanceEntry `json:"dependencies"`
 }
 
-type provenanceLookupData struct {
-	Status             provenanceStatus
-	TrustedPublishing  bool
-	RegistrySignatures int
-	Evidence           []string
-	Error              string
-}
+type provenanceLookupData = provenance.Result
 
 func runProvenance(cmd *cobra.Command, args []string) error {
 	commit, _ := cmd.Flags().GetString("commit")
 	branchName, _ := cmd.Flags().GetString("branch")
 	ecosystem, _ := cmd.Flags().GetString("ecosystem")
-	format, _ := cmd.Flags().GetString("format")
+	format, err := getFormatFlag(cmd, formatText, formatJSON)
+	if err != nil {
+		return err
+	}
 	showMissing, _ := cmd.Flags().GetBool("missing")
 
 	repo, err := git.OpenRepository(".")
@@ -174,7 +157,7 @@ func fetchProvenanceData(ctx context.Context, deps []database.Dependency) map[st
 	}
 
 	var wg sync.WaitGroup
-	client := newProvenanceHTTPClient()
+	client := provenance.NewClient(userAgent)
 	for range workers {
 		wg.Add(1)
 		go func() {
@@ -183,7 +166,11 @@ func fetchProvenanceData(ctx context.Context, deps []database.Dependency) map[st
 				dep := purlToDep[purlStr]
 				out <- lookupResult{
 					purl: purlStr,
-					data: lookupProvenance(ctx, client, dep),
+					data: client.Lookup(ctx, provenance.Dependency{
+						Ecosystem: dep.Ecosystem,
+						Name:      dep.Name,
+						Version:   dep.Requirement,
+					}),
 				}
 			}
 		}()
@@ -244,170 +231,6 @@ func provenancePURLForDependency(dep database.Dependency) string {
 		}
 	}
 	return purl.MakePURLString(dep.Ecosystem, dep.Name, dep.Requirement)
-}
-
-func lookupProvenance(ctx context.Context, client provenanceHTTPClient, dep database.Dependency) provenanceLookupData {
-	switch dep.Ecosystem {
-	case "npm":
-		return lookupNPMProvenance(ctx, client, dep)
-	case "pypi":
-		return lookupPyPIProvenance(ctx, client, dep)
-	case "rubygems":
-		return lookupRubyGemsProvenance(ctx, client, dep)
-	default:
-		return provenanceLookupData{
-			Status:   provenanceStatusUnsupported,
-			Evidence: []string{"provenance lookup is only supported for npm, pypi, and rubygems"},
-		}
-	}
-}
-
-func lookupNPMProvenance(ctx context.Context, client provenanceHTTPClient, dep database.Dependency) provenanceLookupData {
-	endpoint := "https://registry.npmjs.org/" + url.PathEscape(dep.Name) + "/" + url.PathEscape(dep.Requirement)
-	var body map[string]any
-	if err := fetchJSON(ctx, client, endpoint, nil, &body); err != nil {
-		return provenanceLookupData{Status: provenanceStatusError, Error: err.Error()}
-	}
-
-	dist, _ := body["dist"].(map[string]any)
-	evidence := provenanceEvidence(dist)
-	signatures := countJSONList(dist["signatures"])
-
-	if len(evidence) > 0 {
-		return provenanceLookupData{
-			Status:             provenanceStatusTrustedPublishing,
-			TrustedPublishing:  true,
-			RegistrySignatures: signatures,
-			Evidence:           evidence,
-		}
-	}
-	if signatures > 0 {
-		return provenanceLookupData{
-			Status:             provenanceStatusSigned,
-			RegistrySignatures: signatures,
-			Evidence:           []string{"npm registry signature"},
-		}
-	}
-	return provenanceLookupData{Status: provenanceStatusMissing}
-}
-
-func lookupPyPIProvenance(ctx context.Context, client provenanceHTTPClient, dep database.Dependency) provenanceLookupData {
-	endpoint := "https://pypi.org/pypi/" + pathEscape(dep.Name) + "/" + pathEscape(dep.Requirement) + "/json"
-	var body map[string]any
-	if err := fetchJSON(ctx, client, endpoint, nil, &body); err != nil {
-		return provenanceLookupData{Status: provenanceStatusError, Error: err.Error()}
-	}
-
-	evidence := provenanceEvidence(body)
-	if urls, ok := body["urls"].([]any); ok {
-		for _, raw := range urls {
-			if file, ok := raw.(map[string]any); ok {
-				evidence = append(evidence, provenanceEvidence(file)...)
-			}
-		}
-	}
-	evidence = uniqueStrings(evidence)
-	if len(evidence) > 0 {
-		return provenanceLookupData{
-			Status:            provenanceStatusTrustedPublishing,
-			TrustedPublishing: true,
-			Evidence:          evidence,
-		}
-	}
-	return provenanceLookupData{Status: provenanceStatusMissing}
-}
-
-func lookupRubyGemsProvenance(ctx context.Context, client provenanceHTTPClient, dep database.Dependency) provenanceLookupData {
-	endpoint := "https://rubygems.org/api/v2/rubygems/" + pathEscape(dep.Name) + "/versions/" + pathEscape(dep.Requirement) + ".json"
-	var body map[string]any
-	if err := fetchJSON(ctx, client, endpoint, nil, &body); err != nil {
-		return provenanceLookupData{Status: provenanceStatusError, Error: err.Error()}
-	}
-
-	evidence := uniqueStrings(provenanceEvidence(body))
-	if len(evidence) > 0 {
-		return provenanceLookupData{
-			Status:            provenanceStatusTrustedPublishing,
-			TrustedPublishing: true,
-			Evidence:          evidence,
-		}
-	}
-	return provenanceLookupData{Status: provenanceStatusMissing}
-}
-
-func fetchJSON(ctx context.Context, client provenanceHTTPClient, endpoint string, headers map[string]string, target any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("User-Agent", userAgent)
-	req.Header.Set("Accept", "application/json")
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode == http.StatusNotFound {
-		return errors.New("package version not found")
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("registry returned HTTP %d", resp.StatusCode)
-	}
-
-	limited := io.LimitReader(resp.Body, 10<<20)
-	if err := json.NewDecoder(limited).Decode(target); err != nil {
-		return fmt.Errorf("decoding registry response: %w", err)
-	}
-	return nil
-}
-
-func provenanceEvidence(value any) []string {
-	object, ok := value.(map[string]any)
-	if !ok {
-		return nil
-	}
-
-	var evidence []string
-	for _, key := range []string{"attestations", "attestation", "provenance", "provenances", "trusted_publishing", "trustedPublishing"} {
-		if hasJSONValue(object[key]) {
-			evidence = append(evidence, key)
-		}
-	}
-	if dist, ok := object["dist"].(map[string]any); ok {
-		evidence = append(evidence, provenanceEvidence(dist)...)
-	}
-	return evidence
-}
-
-func hasJSONValue(value any) bool {
-	switch v := value.(type) {
-	case nil:
-		return false
-	case string:
-		return v != ""
-	case bool:
-		return v
-	case []any:
-		return len(v) > 0
-	case map[string]any:
-		return len(v) > 0
-	default:
-		return true
-	}
-}
-
-func countJSONList(value any) int {
-	switch v := value.(type) {
-	case []any:
-		return len(v)
-	default:
-		return 0
-	}
 }
 
 func buildProvenanceResult(
@@ -540,8 +363,4 @@ func outputProvenanceText(cmd *cobra.Command, result *ProvenanceResult, showMiss
 		result.Summary.WithoutProvenance,
 		result.Summary.UnsupportedEcosystems,
 		result.Summary.LookupErrors)
-}
-
-func pathEscape(value string) string {
-	return strings.ReplaceAll(url.PathEscape(value), "%2F", "/")
 }

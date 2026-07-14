@@ -1,95 +1,10 @@
 package cmd
 
 import (
-	"context"
-	"io"
-	"net/http"
-	"strings"
 	"testing"
 
 	"github.com/git-pkgs/git-pkgs/internal/database"
 )
-
-type fakeProvenanceHTTPClient struct {
-	responses map[string]string
-	requests  []string
-}
-
-func (f *fakeProvenanceHTTPClient) Do(req *http.Request) (*http.Response, error) {
-	f.requests = append(f.requests, req.URL.String())
-	body, ok := f.responses[req.URL.String()]
-	if !ok {
-		return &http.Response{
-			StatusCode: http.StatusNotFound,
-			Body:       io.NopCloser(strings.NewReader(req.URL.String())),
-		}, nil
-	}
-	return &http.Response{
-		StatusCode: http.StatusOK,
-		Body:       io.NopCloser(strings.NewReader(body)),
-	}, nil
-}
-
-func TestLookupNPMProvenanceTrustedPublishing(t *testing.T) {
-	dep := database.Dependency{
-		Name:        "@scope/pkg",
-		Ecosystem:   "npm",
-		Requirement: "1.2.3",
-	}
-	client := &fakeProvenanceHTTPClient{
-		responses: map[string]string{
-			"https://registry.npmjs.org/@scope%2Fpkg/1.2.3": `{
-				"dist": {
-					"attestations": {"provenance": {"url": "https://registry.npmjs.org/-/npm/v1/attestations/%40scope/pkg@1.2.3"}},
-					"signatures": [{"keyid": "SHA256:test", "sig": "abc"}]
-				}
-			}`,
-		},
-	}
-
-	got := lookupNPMProvenance(context.Background(), client, dep)
-	if got.Status != provenanceStatusTrustedPublishing {
-		t.Fatalf("status = %q, want %q; error = %q; requests = %#v",
-			got.Status, provenanceStatusTrustedPublishing, got.Error, client.requests)
-	}
-	if !got.TrustedPublishing {
-		t.Fatal("trusted publishing = false, want true")
-	}
-	if got.RegistrySignatures != 1 {
-		t.Fatalf("registry signatures = %d, want 1", got.RegistrySignatures)
-	}
-	if len(got.Evidence) == 0 {
-		t.Fatal("expected provenance evidence")
-	}
-}
-
-func TestLookupNPMProvenanceSignedOnly(t *testing.T) {
-	dep := database.Dependency{
-		Name:        "lodash",
-		Ecosystem:   "npm",
-		Requirement: "4.17.21",
-	}
-	client := &fakeProvenanceHTTPClient{
-		responses: map[string]string{
-			"https://registry.npmjs.org/lodash/4.17.21": `{
-				"dist": {
-					"signatures": [{"keyid": "SHA256:test", "sig": "abc"}]
-				}
-			}`,
-		},
-	}
-
-	got := lookupNPMProvenance(context.Background(), client, dep)
-	if got.Status != provenanceStatusSigned {
-		t.Fatalf("status = %q, want %q", got.Status, provenanceStatusSigned)
-	}
-	if got.TrustedPublishing {
-		t.Fatal("trusted publishing = true, want false")
-	}
-	if got.RegistrySignatures != 1 {
-		t.Fatalf("registry signatures = %d, want 1", got.RegistrySignatures)
-	}
-}
 
 func TestSelectProvenanceDependencies(t *testing.T) {
 	deps := []database.Dependency{
@@ -191,22 +106,5 @@ func TestBuildProvenanceResultMissingFilter(t *testing.T) {
 		if dep.Status == string(provenanceStatusUnsupported) && dep.Error != "" {
 			t.Fatalf("unsupported dependency should not be reported as error: %#v", dep)
 		}
-	}
-}
-
-func TestLookupProvenanceUnsupportedUsesEvidence(t *testing.T) {
-	got := lookupProvenance(context.Background(), &fakeProvenanceHTTPClient{}, database.Dependency{
-		Name:        "serde",
-		Ecosystem:   "cargo",
-		Requirement: "1.0.0",
-	})
-	if got.Status != provenanceStatusUnsupported {
-		t.Fatalf("status = %q, want %q", got.Status, provenanceStatusUnsupported)
-	}
-	if got.Error != "" {
-		t.Fatalf("error = %q, want empty", got.Error)
-	}
-	if len(got.Evidence) == 0 {
-		t.Fatal("expected explanatory evidence for unsupported ecosystem")
 	}
 }
