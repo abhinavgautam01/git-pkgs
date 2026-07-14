@@ -160,6 +160,7 @@ Stores per-version metadata for packages.
 | license | text | License for this specific version |
 | published_at | datetime | When this version was published |
 | integrity | text | Integrity hash (e.g., SHA256) |
+| integrity_checked_at | datetime | When integrity was last fetched for this exact version |
 | status | text | Version status, such as deprecated or yanked |
 | status_checked_at | datetime | When version status was last fetched |
 | metadata | text | JSON-encoded registry metadata for this version |
@@ -169,6 +170,15 @@ Stores per-version metadata for packages.
 | updated_at | datetime | |
 
 Indexes: `purl` (unique), `package_purl`
+
+### version_lists
+
+Tracks when a complete version history was fetched for a package.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| package_purl | text | Package PURL with no version |
+| synced_at | datetime | When the complete version list was fetched |
 
 ### vulnerabilities
 

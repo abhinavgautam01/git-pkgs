@@ -307,15 +307,13 @@ func runRegistryCheck(cmd *cobra.Command, db *database.DB, deps []database.Depen
 			toCache = append(toCache, database.CachedVersion{
 				PURL:        purlStr,
 				PackagePURL: packagePURLFromVersioned(purlStr),
-				License:     version.License,
-				PublishedAt: version.PublishedAt,
 				Integrity:   version.Integrity,
 			})
 		}
 	}
 
 	if db != nil {
-		if err := db.SaveVersions(toCache); err != nil {
+		if err := db.SaveVersionIntegrity(toCache); err != nil {
 			return fmt.Errorf("caching registry integrity: %w", err)
 		}
 	}
@@ -368,25 +366,12 @@ func registryCheckPURLs(deps []database.Dependency) ([]string, int) {
 }
 
 func cachedRegistryIntegrities(db *database.DB, versionedPURLs []string) map[string]string {
-	result := make(map[string]string)
 	if db == nil {
-		return result
+		return map[string]string{}
 	}
-	wanted := make(map[string]bool, len(versionedPURLs))
-	for _, purlStr := range versionedPURLs {
-		wanted[purlStr] = true
-	}
-
-	for _, packagePURL := range uniquePackagePURLs(versionedPURLs) {
-		versions, err := db.GetCachedVersions(packagePURL, enrichmentCacheTTL)
-		if err != nil {
-			continue
-		}
-		for _, version := range versions {
-			if wanted[version.PURL] && version.Integrity != "" {
-				result[version.PURL] = version.Integrity
-			}
-		}
+	result, err := db.GetCachedVersionIntegrities(versionedPURLs, enrichmentCacheTTL)
+	if err != nil {
+		return map[string]string{}
 	}
 	return result
 }

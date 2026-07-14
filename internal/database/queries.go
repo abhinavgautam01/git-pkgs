@@ -1789,14 +1789,15 @@ type CachedPackageHealth struct {
 
 // CachedVersion represents cached version data for a package.
 type CachedVersion struct {
-	PURL            string         `json:"purl"`
-	PackagePURL     string         `json:"package_purl"`
-	License         string         `json:"license"`
-	PublishedAt     time.Time      `json:"published_at"`
-	Integrity       string         `json:"integrity,omitempty"`
-	Status          string         `json:"status,omitempty"`
-	StatusCheckedAt time.Time      `json:"status_checked_at,omitempty"`
-	Metadata        map[string]any `json:"metadata,omitempty"`
+	PURL               string         `json:"purl"`
+	PackagePURL        string         `json:"package_purl"`
+	License            string         `json:"license"`
+	PublishedAt        time.Time      `json:"published_at"`
+	Integrity          string         `json:"integrity,omitempty"`
+	IntegrityCheckedAt time.Time      `json:"integrity_checked_at,omitempty"`
+	Status             string         `json:"status,omitempty"`
+	StatusCheckedAt    time.Time      `json:"status_checked_at,omitempty"`
+	Metadata           map[string]any `json:"metadata,omitempty"`
 }
 
 // GetCachedPackages returns cached package data for the given PURLs that aren't stale.
@@ -2318,7 +2319,7 @@ func (db *DB) GetCachedVersionsIncludingStale(packagePurl string) ([]CachedVersi
 
 func (db *DB) getCachedVersions(packagePurl string, staleThreshold *time.Time) ([]CachedVersion, error) {
 	query := `
-		SELECT purl, package_purl, license, published_at, integrity, status, status_checked_at, metadata
+		SELECT purl, package_purl, license, published_at, integrity, integrity_checked_at, status, status_checked_at, metadata
 		FROM versions
 		WHERE package_purl = ?`
 	args := []interface{}{packagePurl}
@@ -2337,9 +2338,9 @@ func (db *DB) getCachedVersions(packagePurl string, staleThreshold *time.Time) (
 	var result []CachedVersion
 	for rows.Next() {
 		var cv CachedVersion
-		var license, integrity, status, statusCheckedAt, metadata sql.NullString
+		var license, integrity, integrityCheckedAt, status, statusCheckedAt, metadata sql.NullString
 		var publishedAt string
-		if err := rows.Scan(&cv.PURL, &cv.PackagePURL, &license, &publishedAt, &integrity, &status, &statusCheckedAt, &metadata); err != nil {
+		if err := rows.Scan(&cv.PURL, &cv.PackagePURL, &license, &publishedAt, &integrity, &integrityCheckedAt, &status, &statusCheckedAt, &metadata); err != nil {
 			return nil, err
 		}
 		if license.Valid {
@@ -2347,6 +2348,9 @@ func (db *DB) getCachedVersions(packagePurl string, staleThreshold *time.Time) (
 		}
 		if integrity.Valid {
 			cv.Integrity = integrity.String
+		}
+		if integrityCheckedAt.Valid {
+			cv.IntegrityCheckedAt, _ = time.Parse(time.RFC3339, integrityCheckedAt.String)
 		}
 		if status.Valid {
 			cv.Status = status.String
@@ -2363,6 +2367,72 @@ func (db *DB) getCachedVersions(packagePurl string, staleThreshold *time.Time) (
 	return result, rows.Err()
 }
 
+// GetCachedVersionList returns a complete cached version list when it is fresh.
+func (db *DB) GetCachedVersionList(packagePURL string, staleDuration time.Duration) ([]CachedVersion, error) {
+	staleThreshold := time.Now().Add(-staleDuration).Format(time.RFC3339)
+	var syncedAt string
+	err := db.QueryRow(
+		"SELECT synced_at FROM version_lists WHERE package_purl = ? AND synced_at >= ?",
+		packagePURL,
+		staleThreshold,
+	).Scan(&syncedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return db.GetCachedVersions(packagePURL, staleDuration)
+}
+
+// GetCachedVersionIntegrities returns fresh integrity hashes for exact version PURLs.
+func (db *DB) GetCachedVersionIntegrities(purls []string, staleDuration time.Duration) (map[string]string, error) {
+	result := make(map[string]string)
+	if len(purls) == 0 {
+		return result, nil
+	}
+
+	staleThreshold := time.Now().Add(-staleDuration).Format(time.RFC3339)
+	const batchSize = 500
+	for i := 0; i < len(purls); i += batchSize {
+		end := i + batchSize
+		if end > len(purls) {
+			end = len(purls)
+		}
+		batch := purls[i:end]
+		placeholders := make([]string, len(batch))
+		args := make([]interface{}, 0, len(batch)+1)
+		for j, purl := range batch {
+			placeholders[j] = "?"
+			args = append(args, purl)
+		}
+		args = append(args, staleThreshold)
+
+		rows, err := db.Query(
+			"SELECT purl, integrity FROM versions WHERE purl IN ("+strings.Join(placeholders, ",")+") AND integrity != '' AND integrity_checked_at >= ?",
+			args...,
+		)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var purl, integrity string
+			if err := rows.Scan(&purl, &integrity); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			result[purl] = integrity
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		_ = rows.Close()
+	}
+
+	return result, nil
+}
+
 // SaveVersions saves version history for a package.
 func (db *DB) SaveVersions(versions []CachedVersion) error {
 	if len(versions) == 0 {
@@ -2377,12 +2447,11 @@ func (db *DB) SaveVersions(versions []CachedVersion) error {
 	defer func() { _ = tx.Rollback() }()
 
 	stmt, err := tx.Prepare(`
-		INSERT INTO versions (purl, package_purl, license, published_at, integrity, status, status_checked_at, metadata, enriched_at, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO versions (purl, package_purl, license, published_at, status, status_checked_at, metadata, enriched_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(purl) DO UPDATE SET
 			license = CASE WHEN excluded.license != '' THEN excluded.license ELSE versions.license END,
 			published_at = CASE WHEN excluded.published_at != '' THEN excluded.published_at ELSE versions.published_at END,
-			integrity = CASE WHEN excluded.integrity != '' THEN excluded.integrity ELSE versions.integrity END,
 			status = CASE WHEN excluded.status_checked_at != '' THEN excluded.status ELSE versions.status END,
 			status_checked_at = CASE WHEN excluded.status_checked_at != '' THEN excluded.status_checked_at ELSE versions.status_checked_at END,
 			metadata = CASE WHEN excluded.status_checked_at != '' THEN excluded.metadata ELSE versions.metadata END,
@@ -2410,7 +2479,62 @@ func (db *DB) SaveVersions(versions []CachedVersion) error {
 			}
 			metadata = string(raw)
 		}
-		if _, err := stmt.Exec(v.PURL, v.PackagePURL, v.License, publishedAt, v.Integrity, v.Status, statusCheckedAt, metadata, now, now, now); err != nil {
+		if _, err := stmt.Exec(v.PURL, v.PackagePURL, v.License, publishedAt, v.Status, statusCheckedAt, metadata, now, now, now); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+// SaveVersionList stores a complete version list and marks it fresh for the package.
+func (db *DB) SaveVersionList(packagePURL string, versions []CachedVersion) error {
+	if len(versions) == 0 {
+		return nil
+	}
+	if err := db.SaveVersions(versions); err != nil {
+		return err
+	}
+	_, err := db.Exec(`
+		INSERT INTO version_lists (package_purl, synced_at)
+		VALUES (?, ?)
+		ON CONFLICT(package_purl) DO UPDATE SET synced_at = excluded.synced_at`,
+		packagePURL,
+		time.Now().Format(time.RFC3339),
+	)
+	return err
+}
+
+// SaveVersionIntegrity stores exact-version integrity data with its own freshness marker.
+func (db *DB) SaveVersionIntegrity(versions []CachedVersion) error {
+	if len(versions) == 0 {
+		return nil
+	}
+
+	now := time.Now().Format(time.RFC3339)
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	stmt, err := tx.Prepare(`
+		INSERT INTO versions (purl, package_purl, integrity, integrity_checked_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(purl) DO UPDATE SET
+			integrity = excluded.integrity,
+			integrity_checked_at = excluded.integrity_checked_at,
+			updated_at = excluded.updated_at`)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = stmt.Close() }()
+
+	for _, v := range versions {
+		if v.PURL == "" || v.PackagePURL == "" || v.Integrity == "" {
+			continue
+		}
+		if _, err := stmt.Exec(v.PURL, v.PackagePURL, v.Integrity, now, now, now); err != nil {
 			return err
 		}
 	}

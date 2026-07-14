@@ -176,6 +176,13 @@ func TestIntegrityCommand(t *testing.T) {
 			PackagePURL: "pkg:npm/express",
 			License:     "MIT",
 			PublishedAt: publishedAt,
+		}}); err != nil {
+			_ = db.Close()
+			t.Fatalf("seed cached version metadata: %v", err)
+		}
+		if err := db.SaveVersionIntegrity([]database.CachedVersion{{
+			PURL:        "pkg:npm/express@4.18.2",
+			PackagePURL: "pkg:npm/express",
 			Integrity:   "sha512-5/PsL6iGPdfQ/lKM1UuielYgv3BUoJfz1aUwU9vHZ+J7gyvwdQXFEBIEIaxeGf0GIcreATNyBExtalisDbuMqQ==",
 		}}); err != nil {
 			_ = db.Close()
@@ -261,6 +268,36 @@ func TestIntegrityCommand(t *testing.T) {
 		mock.mu.Unlock()
 		if cachedCalls != 0 {
 			t.Fatalf("cached registry check made %d version calls, want 0", cachedCalls)
+		}
+
+		db, err = database.Open(filepath.Join(repoDir, ".git", "pkgs.sqlite3"))
+		if err != nil {
+			t.Fatalf("open database: %v", err)
+		}
+		staleAt := time.Now().Add(-48 * time.Hour).Format(time.RFC3339)
+		if _, err := db.Exec("UPDATE versions SET integrity_checked_at = ? WHERE purl = ?", staleAt, "pkg:npm/express@4.18.2"); err != nil {
+			_ = db.Close()
+			t.Fatalf("age integrity cache: %v", err)
+		}
+		if err := db.SaveVersions([]database.CachedVersion{{
+			PURL:        "pkg:npm/express@4.18.2",
+			PackagePURL: "pkg:npm/express",
+			License:     "Apache-2.0",
+		}}); err != nil {
+			_ = db.Close()
+			t.Fatalf("update generic version metadata: %v", err)
+		}
+		integrities, err := db.GetCachedVersionIntegrities([]string{"pkg:npm/express@4.18.2"}, 24*time.Hour)
+		if err != nil {
+			_ = db.Close()
+			t.Fatalf("read cached integrity: %v", err)
+		}
+		if _, ok := integrities["pkg:npm/express@4.18.2"]; ok {
+			_ = db.Close()
+			t.Fatal("generic version update refreshed stale integrity cache")
+		}
+		if err := db.Close(); err != nil {
+			t.Fatalf("close database: %v", err)
 		}
 	})
 }
