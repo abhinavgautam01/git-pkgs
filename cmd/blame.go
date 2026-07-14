@@ -33,7 +33,7 @@ func runBlame(cmd *cobra.Command, args []string) error {
 	}
 	excludeBots, _ := cmd.Flags().GetBool("exclude-bots")
 
-	_, db, err := openDatabase()
+	repo, db, err := openDatabase()
 	if err != nil {
 		return err
 	}
@@ -43,11 +43,16 @@ func runBlame(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	ecosystemFilter, err := repo.EcosystemFilter()
+	if err != nil {
+		return fmt.Errorf("loading ecosystem config: %w", err)
+	}
 
 	entries, err := db.GetBlame(database.BlameOptions{
-		BranchID:    branchInfo.ID,
-		Ecosystem:   ecosystem,
-		ExcludeBots: excludeBots,
+		EcosystemFilterOptions: databaseEcosystemFilterOptions(ecosystemFilter),
+		BranchID:               branchInfo.ID,
+		Ecosystem:              ecosystem,
+		ExcludeBots:            excludeBots,
 	})
 	if err != nil {
 		return fmt.Errorf("getting blame: %w", err)

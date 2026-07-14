@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"os/exec"
+	"sort"
 	"strings"
 
 	"github.com/git-pkgs/purl"
@@ -53,6 +54,26 @@ func (f EcosystemFilter) Allows(ecosystem string) bool {
 	return len(f.allowed) == 0 || f.allowed[normalized]
 }
 
+// Values returns the canonical ecosystem values configured for the allow and
+// ignore lists. The returned slices are sorted for deterministic query inputs.
+func (f EcosystemFilter) Values() (allowed, ignored []string) {
+	allowed = filterValues(f.allowed)
+	ignored = filterValues(f.ignored)
+	return allowed, ignored
+}
+
+func filterValues(values map[string]bool) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	result := make([]string, 0, len(values))
+	for value := range values {
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
+}
+
 func gitConfigValues(dir, key string) ([]string, error) {
 	cmd := exec.Command("git", "config", "--get-all", key)
 	cmd.Dir = dir
@@ -97,6 +118,9 @@ func normalizeEcosystem(ecosystem string) string {
 	ecosystem = strings.ToLower(strings.TrimSpace(ecosystem))
 	if ecosystem == "" {
 		return ""
+	}
+	if ecosystem == "go" {
+		return "golang"
 	}
 	if mapped := purl.PURLTypeToEcosystem(ecosystem); mapped != "" {
 		return strings.ToLower(mapped)

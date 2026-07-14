@@ -497,6 +497,12 @@ func doBisectStep(cmd *cobra.Command, repo *git.Repository, mgr *bisect.Manager,
 	if err != nil {
 		return fmt.Errorf("opening database: %w", err)
 	}
+	ecosystemFilter, err := repo.EcosystemFilter()
+	if err != nil {
+		_ = db.Close()
+		return fmt.Errorf("loading ecosystem config: %w", err)
+	}
+	filterOptions := databaseEcosystemFilterOptions(ecosystemFilter)
 
 	branchInfo, err := resolveBranch(db, "")
 	if err != nil {
@@ -511,10 +517,11 @@ func doBisectStep(cmd *cobra.Command, repo *git.Repository, mgr *bisect.Manager,
 		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Commits not indexed, running reindex...")
 
 		idx := indexer.New(repo, db, indexer.Options{
-			Branch:      branchInfo.Name,
-			Output:      io.Discard,
-			Quiet:       true,
-			Incremental: true,
+			Branch:          branchInfo.Name,
+			Output:          io.Discard,
+			Quiet:           true,
+			Incremental:     true,
+			EcosystemFilter: ecosystemFilter,
 		})
 		if _, err := idx.Run(); err != nil {
 			_ = db.Close()
@@ -542,12 +549,13 @@ func doBisectStep(cmd *cobra.Command, repo *git.Repository, mgr *bisect.Manager,
 	}
 
 	candidates, err := db.GetBisectCandidates(database.BisectOptions{
-		BranchID:     branchInfo.ID,
-		StartSHA:     oldestGood,
-		EndSHA:       state.BadRev,
-		Ecosystem:    state.Ecosystem,
-		PackageName:  state.Package,
-		ManifestPath: state.Manifest,
+		EcosystemFilterOptions: filterOptions,
+		BranchID:               branchInfo.ID,
+		StartSHA:               oldestGood,
+		EndSHA:                 state.BadRev,
+		Ecosystem:              state.Ecosystem,
+		PackageName:            state.Package,
+		ManifestPath:           state.Manifest,
 	})
 	if err != nil {
 		return fmt.Errorf("getting bisect candidates: %w", err)
@@ -613,6 +621,10 @@ func checkBisectComplete(repo *git.Repository, mgr *bisect.Manager, state *bisec
 	if err != nil {
 		return false, "", err
 	}
+	ecosystemFilter, err := repo.EcosystemFilter()
+	if err != nil {
+		return false, "", fmt.Errorf("loading ecosystem config: %w", err)
+	}
 
 	oldestGood := state.GoodRevs[0]
 	for _, g := range state.GoodRevs[1:] {
@@ -624,12 +636,13 @@ func checkBisectComplete(repo *git.Repository, mgr *bisect.Manager, state *bisec
 	}
 
 	candidates, err := db.GetBisectCandidates(database.BisectOptions{
-		BranchID:     branchInfo.ID,
-		StartSHA:     oldestGood,
-		EndSHA:       state.BadRev,
-		Ecosystem:    state.Ecosystem,
-		PackageName:  state.Package,
-		ManifestPath: state.Manifest,
+		EcosystemFilterOptions: databaseEcosystemFilterOptions(ecosystemFilter),
+		BranchID:               branchInfo.ID,
+		StartSHA:               oldestGood,
+		EndSHA:                 state.BadRev,
+		Ecosystem:              state.Ecosystem,
+		PackageName:            state.Package,
+		ManifestPath:           state.Manifest,
 	})
 	if err != nil {
 		return false, "", err

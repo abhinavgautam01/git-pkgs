@@ -261,6 +261,33 @@ func TestInitCommand(t *testing.T) {
 		}
 	})
 
+	t.Run("normalizes go ecosystem alias in config", func(t *testing.T) {
+		repoDir := createTestRepo(t)
+		addFileAndCommit(t, repoDir, "go.mod", "module example.com/test\n\ngo 1.23\n\nrequire github.com/stretchr/testify v1.9.0\n", "Add Go module")
+		setGitConfig(t, repoDir, "pkgs.ignoredEcosystems", "go")
+
+		cleanup := chdir(t, repoDir)
+		defer cleanup()
+
+		if _, _, err := runCmd(t, "init", "--no-hooks"); err != nil {
+			t.Fatalf("init failed: %v", err)
+		}
+
+		db, err := database.Open(filepath.Join(repoDir, ".git", "pkgs.sqlite3"))
+		if err != nil {
+			t.Fatalf("failed to open db: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		var count int
+		if err := db.QueryRow("SELECT COUNT(*) FROM dependency_snapshots WHERE ecosystem = 'golang'").Scan(&count); err != nil {
+			t.Fatalf("failed to count Go snapshots: %v", err)
+		}
+		if count != 0 {
+			t.Fatalf("expected go alias to exclude golang snapshots, got %d", count)
+		}
+	})
+
 	t.Run("fails outside git repo", func(t *testing.T) {
 		tmpDir := t.TempDir()
 

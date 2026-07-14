@@ -491,6 +491,19 @@ func TestBisectDatabaseQueries(t *testing.T) {
 		if len(candidates) != 0 {
 			t.Errorf("expected no rubygems candidates, got %d", len(candidates))
 		}
+
+		candidates, err = db.GetBisectCandidates(database.BisectOptions{
+			EcosystemFilterOptions: database.EcosystemFilterOptions{IgnoredEcosystems: []string{"npm"}},
+			BranchID:               branchInfo.ID,
+			StartSHA:               firstSHA,
+			EndSHA:                 headSHA,
+		})
+		if err != nil {
+			t.Fatalf("GetBisectCandidates failed: %v", err)
+		}
+		if len(candidates) != 0 {
+			t.Errorf("expected ignored npm candidates to be excluded, got %d", len(candidates))
+		}
 	})
 
 	t.Run("printCulprit resolves author via mailmap", func(t *testing.T) {

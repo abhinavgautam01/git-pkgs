@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/git-pkgs/git-pkgs/internal/config"
 	"github.com/git-pkgs/git-pkgs/internal/database"
 	"github.com/git-pkgs/git-pkgs/internal/git"
 	"github.com/git-pkgs/purl"
@@ -136,4 +137,12 @@ func filterSearchResultsByConfig(results []database.SearchResult, allows func(st
 		}
 	}
 	return filtered
+}
+
+func databaseEcosystemFilterOptions(filter config.EcosystemFilter) database.EcosystemFilterOptions {
+	allowed, ignored := filter.Values()
+	return database.EcosystemFilterOptions{
+		AllowedEcosystems: allowed,
+		IgnoredEcosystems: ignored,
+	}
 }

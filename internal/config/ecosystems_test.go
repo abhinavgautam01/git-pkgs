@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestEcosystemFilterAllowsAllWhenUnset(t *testing.T) {
 	filter := NewEcosystemFilter(nil, nil)
@@ -34,6 +37,26 @@ func TestEcosystemFilterIgnoreListWins(t *testing.T) {
 	}
 	if !filter.Allows("rubygems") {
 		t.Fatal("expected rubygems to remain allowed")
+	}
+}
+
+func TestEcosystemFilterNormalizesGoAlias(t *testing.T) {
+	filter := NewEcosystemFilter(nil, []string{"go"})
+
+	if filter.Allows("golang") {
+		t.Fatal("expected go alias to exclude golang")
+	}
+}
+
+func TestEcosystemFilterValues(t *testing.T) {
+	filter := NewEcosystemFilter([]string{"rubygems", "npm"}, []string{"pypi", "go"})
+	allowed, ignored := filter.Values()
+
+	if got, want := strings.Join(allowed, ","), "npm,rubygems"; got != want {
+		t.Fatalf("allowed = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(ignored, ","), "golang,pypi"; got != want {
+		t.Fatalf("ignored = %q, want %q", got, want)
 	}
 }
 

@@ -239,6 +239,45 @@ func TestListCommand(t *testing.T) {
 	})
 }
 
+func TestHistoricalCommandsRespectIgnoredEcosystems(t *testing.T) {
+	repoDir := createTestRepo(t)
+	addFileAndCommit(t, repoDir, "Gemfile", "source \"https://rubygems.org\"\ngem \"rails\", \"~> 7.0\"\n", "Add Rails")
+	addFileAndCommit(t, repoDir, "package.json", packageJSON, "Add npm dependencies")
+	addFileAndCommit(t, repoDir, "package-lock.json", packageLockJSON, "Lock npm dependencies")
+
+	cleanup := chdir(t, repoDir)
+	defer cleanup()
+
+	if _, _, err := runCmd(t, "init"); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	setGitConfig(t, repoDir, "pkgs.ignoredEcosystems", "npm")
+
+	for _, args := range [][]string{
+		{"log", "--limit", "1", "--format", "json"},
+		{"history", "--format", "json"},
+		{"stats", "--format", "json"},
+		{"blame", "--format", "json"},
+		{"stale", "--format", "json"},
+	} {
+		stdout, stderr, err := runCmd(t, args...)
+		if err != nil {
+			t.Fatalf("%s failed: %v\nstderr: %s", strings.Join(args, " "), err, stderr)
+		}
+		if strings.Contains(stdout, "express") || strings.Contains(stdout, "\"npm\"") {
+			t.Fatalf("%s exposed ignored npm data: %s", strings.Join(args, " "), stdout)
+		}
+	}
+
+	stdout, stderr, err := runCmd(t, "why", "express")
+	if err != nil {
+		t.Fatalf("why failed: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, "not found") {
+		t.Fatalf("why should hide ignored npm data, got: %s", stdout)
+	}
+}
+
 func TestEmptyResultsRespectJSONFormat(t *testing.T) {
 	repoDir := createTestRepo(t)
 	addFileAndCommit(t, repoDir, "package.json", packageJSON, "Add package.json")

@@ -61,15 +61,20 @@ func runLog(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("getting branch: %w", err)
 	}
+	ecosystemFilter, err := repo.EcosystemFilter()
+	if err != nil {
+		return fmt.Errorf("loading ecosystem config: %w", err)
+	}
 
 	commits, err := db.GetCommitsWithChanges(database.LogOptions{
-		BranchID:    branchInfo.ID,
-		Ecosystem:   ecosystem,
-		Author:      author,
-		Since:       since,
-		Until:       until,
-		Limit:       limit,
-		ExcludeBots: excludeBots,
+		EcosystemFilterOptions: databaseEcosystemFilterOptions(ecosystemFilter),
+		BranchID:               branchInfo.ID,
+		Ecosystem:              ecosystem,
+		Author:                 author,
+		Since:                  since,
+		Until:                  until,
+		Limit:                  limit,
+		ExcludeBots:            excludeBots,
 	})
 	if err != nil {
 		return fmt.Errorf("getting commits: %w", err)
