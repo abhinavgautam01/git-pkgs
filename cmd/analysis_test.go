@@ -8,8 +8,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/git-pkgs/enrichment"
 	"github.com/git-pkgs/git-pkgs/cmd"
+	"github.com/git-pkgs/git-pkgs/internal/database"
 )
 
 func TestIntegrityCommand(t *testing.T) {
@@ -131,6 +134,118 @@ func TestIntegrityCommand(t *testing.T) {
 
 		if err := rootCmd.Execute(); err != nil {
 			t.Fatalf("integrity with on-demand indexing failed: %v", err)
+		}
+	})
+
+	t.Run("registry check reuses cached integrity", func(t *testing.T) {
+		mock, restore := setMockEnrichmentWithVersionInfos(nil, map[string]*enrichment.VersionInfo{
+			"pkg:npm/express@4.18.2": {
+				Number:    "4.18.2",
+				Integrity: "sha512-5/PsL6iGPdfQ/lKM1UuielYgv3BUoJfz1aUwU9vHZ+J7gyvwdQXFEBIEIaxeGf0GIcreATNyBExtalisDbuMqQ==",
+			},
+			"pkg:npm/lodash@4.17.21": {
+				Number:    "4.17.21",
+				Integrity: "sha512-v2kDEe57lecTulaDIuNTPy3Ry4gLGJ6Z1O3vE1krgXZNrsQ+LFTGHVxVjcXPs17LhbZVGedAJv8XZ1tvj5FvSg==",
+			},
+			"pkg:npm/jest@29.7.0": {
+				Number:    "29.7.0",
+				Integrity: "sha512-NIy3oAFp9shda19ez4HgzXfkzNkFXGj2V8m5xk6xWe/5ESrq7+IzhPRXbqAIEr5E0F5FDp8w1DQFV8+SqGbNwg==",
+			},
+		})
+		defer restore()
+
+		repoDir := createTestRepo(t)
+		addFileAndCommit(t, repoDir, "package-lock.json", packageLockJSON, "Add lockfile")
+
+		cleanup := chdir(t, repoDir)
+		defer cleanup()
+
+		rootCmd := cmd.NewRootCmd()
+		rootCmd.SetArgs([]string{"init"})
+		if err := rootCmd.Execute(); err != nil {
+			t.Fatalf("init failed: %v", err)
+		}
+
+		db, err := database.Open(filepath.Join(repoDir, ".git", "pkgs.sqlite3"))
+		if err != nil {
+			t.Fatalf("open database: %v", err)
+		}
+		if err := db.SaveVersions([]database.CachedVersion{{
+			PURL:        "pkg:npm/express@4.18.2",
+			PackagePURL: "pkg:npm/express",
+			Integrity:   "sha512-5/PsL6iGPdfQ/lKM1UuielYgv3BUoJfz1aUwU9vHZ+J7gyvwdQXFEBIEIaxeGf0GIcreATNyBExtalisDbuMqQ==",
+		}}); err != nil {
+			_ = db.Close()
+			t.Fatalf("seed cached integrity: %v", err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatalf("close database: %v", err)
+		}
+
+		var stdout bytes.Buffer
+		rootCmd = cmd.NewRootCmd()
+		rootCmd.SetArgs([]string{"integrity", "--registry", "--format", "json"})
+		rootCmd.SetOut(&stdout)
+		if err := rootCmd.Execute(); err != nil {
+			t.Fatalf("first registry check failed: %v", err)
+		}
+
+		var first cmd.RegistryCheckResult
+		if err := json.Unmarshal(stdout.Bytes(), &first); err != nil {
+			t.Fatalf("parse first registry result: %v", err)
+		}
+		if first.Checked != 3 || first.Skipped != 0 {
+			t.Fatalf("first registry summary = checked %d, skipped %d; want 3, 0", first.Checked, first.Skipped)
+		}
+
+		mock.mu.Lock()
+		firstCalls := mock.getVersionCalls
+		mock.mu.Unlock()
+		if firstCalls != 2 {
+			t.Fatalf("first registry check made %d version calls, want 2 cache misses", firstCalls)
+		}
+
+		db, err = database.Open(filepath.Join(repoDir, ".git", "pkgs.sqlite3"))
+		if err != nil {
+			t.Fatalf("open database: %v", err)
+		}
+		if err := db.SaveVersions([]database.CachedVersion{{
+			PURL:        "pkg:npm/express@4.18.2",
+			PackagePURL: "pkg:npm/express",
+			PublishedAt: time.Now(),
+		}}); err != nil {
+			_ = db.Close()
+			t.Fatalf("update cached version without integrity: %v", err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatalf("close database: %v", err)
+		}
+
+		mock.mu.Lock()
+		mock.getVersionCalls = 0
+		mock.mu.Unlock()
+
+		stdout.Reset()
+		rootCmd = cmd.NewRootCmd()
+		rootCmd.SetArgs([]string{"integrity", "--registry", "--format", "json"})
+		rootCmd.SetOut(&stdout)
+		if err := rootCmd.Execute(); err != nil {
+			t.Fatalf("cached registry check failed: %v", err)
+		}
+
+		var cached cmd.RegistryCheckResult
+		if err := json.Unmarshal(stdout.Bytes(), &cached); err != nil {
+			t.Fatalf("parse cached registry result: %v", err)
+		}
+		if cached.Checked != 3 || cached.Skipped != 0 {
+			t.Fatalf("cached registry summary = checked %d, skipped %d; want 3, 0", cached.Checked, cached.Skipped)
+		}
+
+		mock.mu.Lock()
+		cachedCalls := mock.getVersionCalls
+		mock.mu.Unlock()
+		if cachedCalls != 0 {
+			t.Fatalf("cached registry check made %d version calls, want 0", cachedCalls)
 		}
 	})
 }

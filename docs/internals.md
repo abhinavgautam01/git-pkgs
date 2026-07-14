@@ -159,8 +159,7 @@ By default, a hybrid approach routes requests based on PURL qualifiers: packages
 
 Data is cached in the `packages` and `versions` tables with a 24-hour TTL. The `packages` table stores provenance: `repository_url` (the registry queried) and `source` (ecosystems or registries). The `funding` command stores package funding links in `packages`, the `maintainers` command stores package maintainer lists in `packages`, the `health` command stores package maintenance health signals in `packages`, and the `deprecated` command uses the `versions` cache and fetches exact-version status from registries when cached deprecation metadata is missing.
 
-The `licenses --drift` check reads per-version license data from the `versions` cache and falls back to enrichment version lookups for uncached installed versions.
-`licenses --offline` disables enrichment requests and permits cached package and version metadata past the normal TTL. It returns an error when required metadata is absent from the cache.
+The `licenses --drift` check reads per-version license data from the `versions` cache and falls back to enrichment version lookups for uncached installed versions. `licenses --offline` disables enrichment requests and permits cached package and version metadata past the normal TTL. It returns an error when required metadata is absent from the cache. `integrity --registry` uses the version cache for registry integrity hashes and fetches only missing or stale versions.
 
 ## Package Management
 

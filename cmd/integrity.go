@@ -10,7 +10,6 @@ import (
 
 	"github.com/git-pkgs/git-pkgs/internal/database"
 	"github.com/git-pkgs/git-pkgs/internal/git"
-	"github.com/git-pkgs/purl"
 	"github.com/spf13/cobra"
 )
 
@@ -88,7 +87,7 @@ func runIntegrity(cmd *cobra.Command, args []string) error {
 
 	// Handle registry mismatch check mode
 	if checkRegistry {
-		return runRegistryCheck(cmd, deps, format)
+		return runRegistryCheck(cmd, db, deps, format)
 	}
 
 	// Filter to lockfile deps with integrity hashes
@@ -259,7 +258,7 @@ func outputDriftText(cmd *cobra.Command, drifts []IntegrityDrift) {
 	}
 }
 
-func runRegistryCheck(cmd *cobra.Command, deps []database.Dependency, format string) error {
+func runRegistryCheck(cmd *cobra.Command, db *database.DB, deps []database.Dependency, format string) error {
 	// Filter to lockfile deps with integrity hashes
 	var lockfileDeps []database.Dependency
 	for _, d := range deps {
@@ -276,49 +275,58 @@ func runRegistryCheck(cmd *cobra.Command, deps []database.Dependency, format str
 		return nil
 	}
 
-	// Create enrichment client
-	client, err := newEnrichmentClient()
+	versionedPURLs, invalidPURLs := registryCheckPURLs(lockfileDeps)
+	registryHashes, err := cachedRegistryIntegrities(db, versionedPURLs)
 	if err != nil {
-		return fmt.Errorf("creating enrichment client: %w", err)
+		return fmt.Errorf("loading cached registry integrity: %w", err)
 	}
 
-	const registryCheckTimeout = 120 * time.Second
-	ctx, cancel := context.WithTimeout(context.Background(), registryCheckTimeout)
-	defer cancel()
+	checked := len(registryHashes)
+	skipped := invalidPURLs
+	var toCache []database.CachedVersion
+	missing := missingRegistryIntegrityPURLs(versionedPURLs, registryHashes)
+	if len(missing) > 0 {
+		client, err := newEnrichmentClient()
+		if err != nil {
+			return fmt.Errorf("creating enrichment client: %w", err)
+		}
 
-	// Check each dependency against registry
-	var mismatches []RegistryMismatch
-	checked := 0
-	skipped := 0
+		const registryCheckTimeout = 120 * time.Second
+		ctx, cancel := context.WithTimeout(context.Background(), registryCheckTimeout)
+		defer cancel()
 
-	// Deduplicate by name+version to avoid redundant API calls
-	type key struct{ name, version, ecosystem string }
-	seen := make(map[key]string) // key -> registry integrity
-
-	for _, d := range lockfileDeps {
-		k := key{d.Name, d.Requirement, d.Ecosystem}
-
-		var registryHash string
-		if cached, ok := seen[k]; ok {
-			registryHash = cached
-		} else {
-			// Build versioned PURL
-			purlStr := purl.MakePURLString(d.Ecosystem, d.Name, d.Requirement)
-			if purlStr == "" {
-				skipped++
-				continue
-			}
-
+		for _, purlStr := range missing {
 			version, err := client.GetVersion(ctx, purlStr)
 			if err != nil || version == nil {
 				skipped++
 				continue
 			}
 
-			registryHash = version.Integrity
-			seen[k] = registryHash
 			checked++
+			if version.Integrity == "" {
+				continue
+			}
+			registryHashes[purlStr] = version.Integrity
+			toCache = append(toCache, database.CachedVersion{
+				PURL:        purlStr,
+				PackagePURL: packagePURLFromVersioned(purlStr),
+				License:     version.License,
+				PublishedAt: version.PublishedAt,
+				Integrity:   version.Integrity,
+			})
 		}
+	}
+
+	if db != nil {
+		if err := db.SaveVersions(toCache); err != nil {
+			return fmt.Errorf("caching registry integrity: %w", err)
+		}
+	}
+
+	var mismatches []RegistryMismatch
+	for _, d := range lockfileDeps {
+		purlStr := versionedPURLForDependency(d)
+		registryHash := registryHashes[purlStr]
 
 		if registryHash == "" {
 			continue
@@ -341,6 +349,59 @@ func runRegistryCheck(cmd *cobra.Command, deps []database.Dependency, format str
 		return outputRegistryMismatchJSON(cmd, mismatches, checked, skipped)
 	}
 	return outputRegistryMismatchText(cmd, mismatches, checked, skipped)
+}
+
+func registryCheckPURLs(deps []database.Dependency) ([]string, int) {
+	seen := make(map[string]bool)
+	versionedPURLs := make([]string, 0, len(deps))
+	invalid := 0
+	for _, dep := range deps {
+		purlStr := versionedPURLForDependency(dep)
+		if purlStr == "" {
+			invalid++
+			continue
+		}
+		if seen[purlStr] {
+			continue
+		}
+		seen[purlStr] = true
+		versionedPURLs = append(versionedPURLs, purlStr)
+	}
+	return versionedPURLs, invalid
+}
+
+func cachedRegistryIntegrities(db *database.DB, versionedPURLs []string) (map[string]string, error) {
+	result := make(map[string]string)
+	if db == nil {
+		return result, nil
+	}
+	wanted := make(map[string]bool, len(versionedPURLs))
+	for _, purlStr := range versionedPURLs {
+		wanted[purlStr] = true
+	}
+
+	for _, packagePURL := range uniquePackagePURLs(versionedPURLs) {
+		versions, err := db.GetCachedVersions(packagePURL, enrichmentCacheTTL)
+		if err != nil {
+			return nil, err
+		}
+		for _, version := range versions {
+			if wanted[version.PURL] && version.Integrity != "" {
+				result[version.PURL] = version.Integrity
+			}
+		}
+	}
+	return result, nil
+}
+
+func missingRegistryIntegrityPURLs(versionedPURLs []string, cached map[string]string) []string {
+	missing := make([]string, 0, len(versionedPURLs))
+	for _, purlStr := range versionedPURLs {
+		if cached[purlStr] == "" {
+			missing = append(missing, purlStr)
+		}
+	}
+	return missing
 }
 
 func hashesMatch(local, registry string) bool {

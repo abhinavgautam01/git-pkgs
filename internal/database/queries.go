@@ -1793,6 +1793,7 @@ type CachedVersion struct {
 	PackagePURL     string         `json:"package_purl"`
 	License         string         `json:"license"`
 	PublishedAt     time.Time      `json:"published_at"`
+	Integrity       string         `json:"integrity,omitempty"`
 	Status          string         `json:"status,omitempty"`
 	StatusCheckedAt time.Time      `json:"status_checked_at,omitempty"`
 	Metadata        map[string]any `json:"metadata,omitempty"`
@@ -2317,7 +2318,7 @@ func (db *DB) GetCachedVersionsIncludingStale(packagePurl string) ([]CachedVersi
 
 func (db *DB) getCachedVersions(packagePurl string, staleThreshold *time.Time) ([]CachedVersion, error) {
 	query := `
-		SELECT purl, package_purl, license, published_at, status, status_checked_at, metadata
+		SELECT purl, package_purl, license, published_at, integrity, status, status_checked_at, metadata
 		FROM versions
 		WHERE package_purl = ?`
 	args := []interface{}{packagePurl}
@@ -2336,13 +2337,16 @@ func (db *DB) getCachedVersions(packagePurl string, staleThreshold *time.Time) (
 	var result []CachedVersion
 	for rows.Next() {
 		var cv CachedVersion
-		var license, status, statusCheckedAt, metadata sql.NullString
+		var license, integrity, status, statusCheckedAt, metadata sql.NullString
 		var publishedAt string
-		if err := rows.Scan(&cv.PURL, &cv.PackagePURL, &license, &publishedAt, &status, &statusCheckedAt, &metadata); err != nil {
+		if err := rows.Scan(&cv.PURL, &cv.PackagePURL, &license, &publishedAt, &integrity, &status, &statusCheckedAt, &metadata); err != nil {
 			return nil, err
 		}
 		if license.Valid {
 			cv.License = license.String
+		}
+		if integrity.Valid {
+			cv.Integrity = integrity.String
 		}
 		if status.Valid {
 			cv.Status = status.String
@@ -2373,11 +2377,12 @@ func (db *DB) SaveVersions(versions []CachedVersion) error {
 	defer func() { _ = tx.Rollback() }()
 
 	stmt, err := tx.Prepare(`
-		INSERT INTO versions (purl, package_purl, license, published_at, status, status_checked_at, metadata, enriched_at, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO versions (purl, package_purl, license, published_at, integrity, status, status_checked_at, metadata, enriched_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(purl) DO UPDATE SET
 			license = excluded.license,
 			published_at = excluded.published_at,
+			integrity = CASE WHEN excluded.integrity != '' THEN excluded.integrity ELSE versions.integrity END,
 			status = CASE WHEN excluded.status_checked_at != '' THEN excluded.status ELSE versions.status END,
 			status_checked_at = CASE WHEN excluded.status_checked_at != '' THEN excluded.status_checked_at ELSE versions.status_checked_at END,
 			metadata = CASE WHEN excluded.status_checked_at != '' THEN excluded.metadata ELSE versions.metadata END,
@@ -2405,7 +2410,7 @@ func (db *DB) SaveVersions(versions []CachedVersion) error {
 			}
 			metadata = string(raw)
 		}
-		if _, err := stmt.Exec(v.PURL, v.PackagePURL, v.License, publishedAt, v.Status, statusCheckedAt, metadata, now, now, now); err != nil {
+		if _, err := stmt.Exec(v.PURL, v.PackagePURL, v.License, publishedAt, v.Integrity, v.Status, statusCheckedAt, metadata, now, now, now); err != nil {
 			return err
 		}
 	}
