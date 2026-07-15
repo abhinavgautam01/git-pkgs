@@ -223,7 +223,7 @@ func loadFreshnessVersions(db *database.DB, deps []database.Dependency) (map[str
 		}
 		result[purlStr] = versions
 		if db != nil {
-			_ = db.SaveVersions(cachedVersionsFromFreshness(purlStr, versions))
+			_ = db.SaveVersionList(purlStr, cachedVersionsFromFreshness(purlStr, versions))
 		}
 	}
 	if len(fetchErrors) == len(missing) {
@@ -245,7 +245,7 @@ func cachedFreshnessVersions(db *database.DB, purlStr string) ([]freshnessVersio
 		return nil, nil
 	}
 
-	cached, err := db.GetCachedVersions(purlStr, enrichmentCacheTTL)
+	cached, err := db.GetCachedVersionList(purlStr, enrichmentCacheTTL)
 	if err != nil {
 		return nil, err
 	}

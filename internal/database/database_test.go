@@ -73,6 +73,7 @@ func TestCreate(t *testing.T) {
 			"dependency_snapshots",
 			"packages",
 			"versions",
+			"version_lists",
 			"vulnerabilities",
 			"vulnerability_packages",
 			"notes",

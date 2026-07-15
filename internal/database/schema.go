@@ -129,6 +129,7 @@ func (db *DB) CreateSchema() error {
 		license TEXT,
 		published_at DATETIME,
 		integrity TEXT,
+		integrity_checked_at DATETIME,
 		status TEXT,
 		status_checked_at DATETIME,
 		metadata TEXT,
@@ -139,6 +140,11 @@ func (db *DB) CreateSchema() error {
 	);
 	CREATE UNIQUE INDEX IF NOT EXISTS idx_versions_purl ON versions(purl);
 	CREATE INDEX IF NOT EXISTS idx_versions_package_purl ON versions(package_purl);
+
+	CREATE TABLE IF NOT EXISTS version_lists (
+		package_purl TEXT PRIMARY KEY,
+		synced_at DATETIME NOT NULL
+	);
 
 	CREATE TABLE IF NOT EXISTS vulnerabilities (
 		id TEXT PRIMARY KEY,

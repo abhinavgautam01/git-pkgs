@@ -457,10 +457,12 @@ Show SHA256 hashes from lockfiles. Modern lockfiles include checksums that verif
 ```bash
 git pkgs integrity              # show hashes for current dependencies
 git pkgs integrity --drift      # detect same version with different hashes
+git pkgs integrity --registry   # compare hashes with registry metadata
 git pkgs integrity -f json      # JSON output
 ```
 
 The `--drift` flag scans your history for packages where the same version has different integrity hashes, which could indicate a supply chain issue.
+Registry integrity metadata is cached for 24 hours, so repeated `--registry` checks only fetch missing or stale package versions.
 
 ### SBOM export
 

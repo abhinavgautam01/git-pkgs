@@ -273,7 +273,7 @@ func getPackageData(db *database.DB, purls []string, purlToDep map[string]databa
 func findLatestAtDateCached(db *database.DB, ecosystem, name, purl string, atTime time.Time) string {
 	// Check cache first if DB available
 	if db != nil {
-		versions, err := db.GetCachedVersions(purl, enrichmentCacheTTL)
+		versions, err := db.GetCachedVersionList(purl, enrichmentCacheTTL)
 		if err == nil && len(versions) > 0 {
 			var latestVersion string
 			var latestTime time.Time
@@ -332,7 +332,7 @@ func findLatestAtDateCached(db *database.DB, ecosystem, name, purl string, atTim
 
 	// Save to cache if DB available
 	if db != nil && len(toCache) > 0 {
-		_ = db.SaveVersions(toCache)
+		_ = db.SaveVersionList(purl, toCache)
 	}
 
 	return latestVersion

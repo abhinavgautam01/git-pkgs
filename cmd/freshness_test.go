@@ -171,6 +171,84 @@ func TestFreshnessCommandFailsWhenAllMetadataFetchesFail(t *testing.T) {
 	}
 }
 
+func TestFreshnessFetchesListAfterIntegrityOnlyCache(t *testing.T) {
+	t.Setenv("GIT_PKGS_DB", "")
+	const lockfile = `{
+  "name": "test-app",
+  "lockfileVersion": 3,
+  "packages": {
+    "": {"name": "test-app"},
+    "node_modules/express": {
+      "version": "4.18.2",
+      "integrity": "sha512-local"
+    }
+  }
+}`
+
+	mock, restore := setMockEnrichmentClient(&mockEnrichmentClient{
+		versions: map[string][]enrichment.VersionInfo{
+			"pkg:npm/express": {
+				{Number: "4.18.2", PublishedAt: time.Date(2023, time.January, 1, 0, 0, 0, 0, time.UTC)},
+				{Number: "5.0.0", PublishedAt: time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC)},
+			},
+		},
+		versionInfos: map[string]*enrichment.VersionInfo{
+			"pkg:npm/express@4.18.2": {Number: "4.18.2", Integrity: "sha512-local"},
+		},
+	})
+	defer restore()
+
+	repoDir := createTestRepo(t)
+	addFileAndCommit(t, repoDir, "package-lock.json", lockfile, "Add lockfile")
+
+	cleanup := chdir(t, repoDir)
+	defer cleanup()
+
+	rootCmd := cmd.NewRootCmd()
+	rootCmd.SetArgs([]string{"init"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	rootCmd = cmd.NewRootCmd()
+	rootCmd.SetArgs([]string{"integrity", "--registry"})
+	rootCmd.SetOut(&bytes.Buffer{})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("integrity registry check failed: %v", err)
+	}
+
+	mock.mu.Lock()
+	mock.getVersionsCalls = 0
+	mock.mu.Unlock()
+
+	rootCmd = cmd.NewRootCmd()
+	rootCmd.SetArgs([]string{"freshness"})
+	rootCmd.SetOut(&bytes.Buffer{})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("freshness failed after integrity-only cache: %v", err)
+	}
+
+	mock.mu.Lock()
+	getVersionsCalls := mock.getVersionsCalls
+	mock.mu.Unlock()
+	if getVersionsCalls != 1 {
+		t.Fatalf("GetVersions calls = %d, want 1 after integrity-only cache", getVersionsCalls)
+	}
+
+	db, err := database.Open(filepath.Join(repoDir, ".git", "pkgs.sqlite3"))
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	cached, err := db.GetCachedVersionList("pkg:npm/express", 24*time.Hour)
+	if err != nil {
+		t.Fatalf("read cached version list: %v", err)
+	}
+	if len(cached) != 2 {
+		t.Fatalf("cached version list length = %d, want 2", len(cached))
+	}
+}
+
 func seedFreshnessVersions(t *testing.T, repoDir string) {
 	t.Helper()
 
@@ -196,7 +274,13 @@ func seedFreshnessVersions(t *testing.T, repoDir string) {
 		{PURL: "pkg:npm/jest@29.7.0", PackagePURL: "pkg:npm/jest", PublishedAt: mustTime("2023-01-01T00:00:00Z")},
 		{PURL: "pkg:npm/jest@30.0.0", PackagePURL: "pkg:npm/jest", PublishedAt: mustTime("2023-04-02T00:00:00Z")},
 	}
-	if err := db.SaveVersions(versions); err != nil {
-		t.Fatalf("saving versions: %v", err)
+	byPackage := map[string][]database.CachedVersion{}
+	for _, version := range versions {
+		byPackage[version.PackagePURL] = append(byPackage[version.PackagePURL], version)
+	}
+	for packagePURL, packageVersions := range byPackage {
+		if err := db.SaveVersionList(packagePURL, packageVersions); err != nil {
+			t.Fatalf("saving versions: %v", err)
+		}
 	}
 }
