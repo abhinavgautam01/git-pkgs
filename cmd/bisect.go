@@ -665,6 +665,10 @@ func checkBisectComplete(repo *git.Repository, mgr *bisect.Manager, state *bisec
 
 func printCulprit(cmd *cobra.Command, repo *git.Repository, sha string) error {
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s is the first bad commit\n", sha)
+	ecosystemFilter, err := repo.EcosystemFilter()
+	if err != nil {
+		return fmt.Errorf("loading ecosystem config: %w", err)
+	}
 
 	// Get commit details
 	hash, err := repo.ResolveRevision(sha)
@@ -702,6 +706,9 @@ func printCulprit(cmd *cobra.Command, repo *git.Repository, sha string) error {
 		defer func() { _ = db.Close() }()
 
 		changes, err := db.GetChangesForCommit(sha)
+		if err == nil {
+			changes = filterChangesByEcosystemConfig(changes, ecosystemFilter.Allows)
+		}
 		if err == nil && len(changes) > 0 {
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Dependencies changed:")
 			for _, c := range changes {

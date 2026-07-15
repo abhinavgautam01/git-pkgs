@@ -547,6 +547,7 @@ func TestBisectDatabaseQueries(t *testing.T) {
 		if err := rootCmd.Execute(); err != nil {
 			t.Fatalf("failed to init git-pkgs: %v", err)
 		}
+		setGitConfig(t, repoDir, "pkgs.ignoredEcosystems", "npm")
 
 		// Start bisect with first and last dependency commit
 		firstSHA := getGitSHA(t, repoDir, "HEAD~2") // First dep commit
@@ -569,6 +570,9 @@ func TestBisectDatabaseQueries(t *testing.T) {
 		}
 		if !strings.Contains(stdout, "canonical@example.com") {
 			t.Errorf("expected canonical email from mailmap, got: %s", stdout)
+		}
+		if strings.Contains(stdout, "Dependencies changed:") {
+			t.Errorf("expected ignored npm changes to be hidden, got: %s", stdout)
 		}
 
 		// Clean up
