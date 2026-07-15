@@ -60,6 +60,22 @@ func TestEcosystemFilterValues(t *testing.T) {
 	}
 }
 
+func TestEcosystemFilterStoredValuesIncludesPURLAliases(t *testing.T) {
+	filter := NewEcosystemFilter(
+		[]string{"rubygems", "packagist", "github-actions", "alpine", "arch"},
+		nil,
+	)
+	allowed, ignored := filter.StoredValues()
+
+	if len(ignored) != 0 {
+		t.Fatalf("ignored = %#v, want none", ignored)
+	}
+	want := "alpine,alpm,apk,arch,composer,gem,github-actions,githubactions,packagist,rubygems"
+	if got := strings.Join(allowed, ","); got != want {
+		t.Fatalf("allowed = %q, want %q", got, want)
+	}
+}
+
 func TestSplitConfigValues(t *testing.T) {
 	values := splitConfigValues("npm, rubygems\npypi\tgolang")
 

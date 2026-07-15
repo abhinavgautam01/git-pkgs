@@ -62,6 +62,33 @@ func (f EcosystemFilter) Values() (allowed, ignored []string) {
 	return allowed, ignored
 }
 
+// StoredValues returns filter values expanded to include the PURL type aliases
+// that manifest parsers may persist in the database.
+func (f EcosystemFilter) StoredValues() (allowed, ignored []string) {
+	allowed = storedEcosystemValues(f.allowed)
+	ignored = storedEcosystemValues(f.ignored)
+	return allowed, ignored
+}
+
+func storedEcosystemValues(values map[string]bool) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	stored := make(map[string]bool, len(values)*2)
+	for ecosystem := range values {
+		stored[ecosystem] = true
+		purlType := purl.EcosystemToPURLType(ecosystem)
+		if purlType == "" {
+			continue
+		}
+		stored[purlType] = true
+		if mapped := purl.PURLTypeToEcosystem(purlType); mapped != "" {
+			stored[mapped] = true
+		}
+	}
+	return filterValues(stored)
+}
+
 func filterValues(values map[string]bool) []string {
 	if len(values) == 0 {
 		return nil

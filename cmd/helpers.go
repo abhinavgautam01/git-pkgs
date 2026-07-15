@@ -140,7 +140,7 @@ func filterSearchResultsByConfig(results []database.SearchResult, allows func(st
 }
 
 func databaseEcosystemFilterOptions(filter config.EcosystemFilter) database.EcosystemFilterOptions {
-	allowed, ignored := filter.Values()
+	allowed, ignored := filter.StoredValues()
 	return database.EcosystemFilterOptions{
 		AllowedEcosystems: allowed,
 		IgnoredEcosystems: ignored,

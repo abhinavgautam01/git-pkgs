@@ -278,6 +278,47 @@ func TestHistoricalCommandsRespectIgnoredEcosystems(t *testing.T) {
 	}
 }
 
+func TestHistoricalCommandsRespectRubyGemsEcosystemAlias(t *testing.T) {
+	repoDir := createTestRepo(t)
+	addFileAndCommit(t, repoDir, "Gemfile", "source \"https://rubygems.org\"\ngem \"rails\", \"~> 7.0\"\n", "Add Rails")
+
+	cleanup := chdir(t, repoDir)
+	defer cleanup()
+
+	if _, _, err := runCmd(t, "init"); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	setGitConfig(t, repoDir, "pkgs.ignoredEcosystems", "rubygems")
+
+	stdout, stderr, err := runCmd(t, "log", "--format", "json")
+	if err != nil {
+		t.Fatalf("log failed: %v\nstderr: %s", err, stderr)
+	}
+	var logEntries []any
+	if err := json.Unmarshal([]byte(stdout), &logEntries); err != nil {
+		t.Fatalf("decode log JSON: %v\noutput: %s", err, stdout)
+	}
+	if len(logEntries) != 0 {
+		t.Fatalf("log exposed ignored RubyGems changes: %s", stdout)
+	}
+
+	stdout, stderr, err = runCmd(t, "stats", "--format", "json")
+	if err != nil {
+		t.Fatalf("stats failed: %v\nstderr: %s", err, stderr)
+	}
+	var stats struct {
+		CurrentDeps  int            `json:"current_deps"`
+		TotalChanges int            `json:"total_changes"`
+		DepsBySystem map[string]int `json:"deps_by_ecosystem"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &stats); err != nil {
+		t.Fatalf("decode stats JSON: %v\noutput: %s", err, stdout)
+	}
+	if stats.CurrentDeps != 0 || stats.TotalChanges != 0 || len(stats.DepsBySystem) != 0 {
+		t.Fatalf("stats exposed ignored RubyGems data: %s", stdout)
+	}
+}
+
 func TestEmptyResultsRespectJSONFormat(t *testing.T) {
 	repoDir := createTestRepo(t)
 	addFileAndCommit(t, repoDir, "package.json", packageJSON, "Add package.json")
