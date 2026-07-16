@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -20,9 +21,11 @@ import (
 
 // mockSource implements vulns.Source for testing.
 type mockSource struct {
-	vulns    map[string]*vulns.Vulnerability // ID -> full vuln
-	batchRes [][]vulns.Vulnerability         // QueryBatch results
-	getCalls atomic.Int64
+	vulns      map[string]*vulns.Vulnerability // ID -> full vuln
+	batchRes   [][]vulns.Vulnerability         // QueryBatch results
+	batchErr   error
+	batchPURLs []*purl.PURL
+	getCalls   atomic.Int64
 }
 
 func (m *mockSource) Name() string { return "mock" }
@@ -31,8 +34,9 @@ func (m *mockSource) Query(_ context.Context, _ *purl.PURL) ([]vulns.Vulnerabili
 	return nil, nil
 }
 
-func (m *mockSource) QueryBatch(_ context.Context, _ []*purl.PURL) ([][]vulns.Vulnerability, error) {
-	return m.batchRes, nil
+func (m *mockSource) QueryBatch(_ context.Context, purls []*purl.PURL) ([][]vulns.Vulnerability, error) {
+	m.batchPURLs = append([]*purl.PURL(nil), purls...)
+	return m.batchRes, m.batchErr
 }
 
 func (m *mockSource) Get(_ context.Context, id string) (*vulns.Vulnerability, error) {
@@ -203,6 +207,69 @@ func TestSyncVulnerabilitiesForDeps_QuietMode(t *testing.T) {
 	}
 	if buf.Len() != 0 {
 		t.Errorf("expected no output in quiet mode, got: %s", buf.String())
+	}
+}
+
+func TestSyncVulnerabilitiesForDepsSkipsUnsupportedEcosystems(t *testing.T) {
+	source := &mockSource{batchRes: [][]vulns.Vulnerability{nil}}
+	deps := []database.Dependency{
+		{Ecosystem: "npm", Name: "foo", Requirement: "1.0.0", ManifestPath: "package-lock.json", ManifestKind: "lockfile"},
+		{Ecosystem: "generic", Name: "tool", Requirement: "1.0.0", ManifestPath: "tools.lock", ManifestKind: "lockfile"},
+	}
+
+	db := newTestDB(t)
+	var buf bytes.Buffer
+	if err := syncVulnerabilitiesForDeps(db, source, deps, true, false, &buf); err != nil {
+		t.Fatalf("syncVulnerabilitiesForDeps() error = %v", err)
+	}
+
+	if len(source.batchPURLs) != 1 {
+		t.Fatalf("queried %d packages, want 1: %#v", len(source.batchPURLs), source.batchPURLs)
+	}
+	if got := source.batchPURLs[0].String(); got != "pkg:npm/foo" {
+		t.Fatalf("queried %q, want pkg:npm/foo", got)
+	}
+	if output := buf.String(); !strings.Contains(output, "Skipping 1 dependencies from unsupported OSV ecosystem: generic (tools.lock).") {
+		t.Fatalf("expected unsupported ecosystem message, got: %s", output)
+	}
+}
+
+func TestSyncVulnerabilitiesForDepsWithOnlyUnsupportedEcosystems(t *testing.T) {
+	source := &mockSource{}
+	deps := []database.Dependency{
+		{Ecosystem: "generic", Name: "tool", Requirement: "1.0.0", ManifestPath: "tools.lock", ManifestKind: "lockfile"},
+	}
+
+	db := newTestDB(t)
+	var buf bytes.Buffer
+	if err := syncVulnerabilitiesForDeps(db, source, deps, true, false, &buf); err != nil {
+		t.Fatalf("syncVulnerabilitiesForDeps() error = %v", err)
+	}
+	if len(source.batchPURLs) != 0 {
+		t.Fatalf("queried unsupported package: %#v", source.batchPURLs)
+	}
+	if output := buf.String(); !strings.Contains(output, "No dependencies with OSV-supported ecosystems to sync.") {
+		t.Fatalf("expected no-supported-dependencies message, got: %s", output)
+	}
+}
+
+func TestSyncVulnerabilitiesForDepsBatchErrorIdentifiesDependency(t *testing.T) {
+	source := &mockSource{
+		batchErr: errors.New("batch query failed with status 400: error in query at index 0: invalid ecosystem"),
+	}
+	deps := []database.Dependency{
+		{Ecosystem: "npm", Name: "foo", Requirement: "1.0.0", ManifestPath: "package-lock.json", ManifestKind: "lockfile"},
+	}
+
+	db := newTestDB(t)
+	err := syncVulnerabilitiesForDeps(db, source, deps, true, true, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected sync error")
+	}
+	for _, want := range []string{"pkg:npm/foo", "package-lock.json", "invalid ecosystem"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not include %q", err, want)
+		}
 	}
 }
 
