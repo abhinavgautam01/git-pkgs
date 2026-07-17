@@ -24,7 +24,9 @@ type mockSource struct {
 	vulns      map[string]*vulns.Vulnerability // ID -> full vuln
 	batchRes   [][]vulns.Vulnerability         // QueryBatch results
 	batchErr   error
+	batchErrs  []error
 	batchPURLs []*purl.PURL
+	batchCalls int
 	getCalls   atomic.Int64
 }
 
@@ -36,6 +38,11 @@ func (m *mockSource) Query(_ context.Context, _ *purl.PURL) ([]vulns.Vulnerabili
 
 func (m *mockSource) QueryBatch(_ context.Context, purls []*purl.PURL) ([][]vulns.Vulnerability, error) {
 	m.batchPURLs = append([]*purl.PURL(nil), purls...)
+	call := m.batchCalls
+	m.batchCalls++
+	if call < len(m.batchErrs) && m.batchErrs[call] != nil {
+		return nil, m.batchErrs[call]
+	}
 	return m.batchRes, m.batchErr
 }
 
@@ -215,6 +222,7 @@ func TestSyncVulnerabilitiesForDepsSkipsUnsupportedEcosystems(t *testing.T) {
 	deps := []database.Dependency{
 		{Ecosystem: "npm", Name: "foo", Requirement: "1.0.0", ManifestPath: "package-lock.json", ManifestKind: "lockfile"},
 		{Ecosystem: "generic", Name: "tool", Requirement: "1.0.0", ManifestPath: "tools.lock", ManifestKind: "lockfile"},
+		{Ecosystem: "generic", Name: "tool", Requirement: "1.0.0", ManifestPath: "other.lock", ManifestKind: "lockfile"},
 	}
 
 	db := newTestDB(t)
@@ -229,8 +237,29 @@ func TestSyncVulnerabilitiesForDepsSkipsUnsupportedEcosystems(t *testing.T) {
 	if got := source.batchPURLs[0].String(); got != "pkg:npm/foo" {
 		t.Fatalf("queried %q, want pkg:npm/foo", got)
 	}
-	if output := buf.String(); !strings.Contains(output, "Skipping 1 dependencies from unsupported OSV ecosystem: generic (tools.lock).") {
+	if output := buf.String(); !strings.Contains(output, "Skipping 2 dependencies from unsupported OSV ecosystem: generic (other.lock), generic (tools.lock).") {
 		t.Fatalf("expected unsupported ecosystem message, got: %s", output)
+	}
+}
+
+func TestBuildOSVQueriesUsesCurrentAPIMapping(t *testing.T) {
+	deps := []database.Dependency{
+		{Ecosystem: "swift", Name: "example", Requirement: "1.0.0", ManifestPath: "Package.resolved", ManifestKind: "lockfile"},
+		{Ecosystem: "cocoapods", Name: "Alamofire", Requirement: "5.0.0", ManifestPath: "Podfile.lock", ManifestKind: "lockfile"},
+	}
+
+	queries, skipped := buildOSVQueries(deps, true)
+	if len(queries) != 1 {
+		t.Fatalf("queries = %d, want 1", len(queries))
+	}
+	if got := queries[0].purl.String(); got != "pkg:swift/example@1.0.0" {
+		t.Errorf("PURL = %q, want pkg:swift/example@1.0.0", got)
+	}
+	if got := queries[0].requestPURL.Type; got != "SwiftURL" {
+		t.Errorf("OSV request type = %q, want SwiftURL", got)
+	}
+	if len(skipped) != 1 || skipped[0].Ecosystem != "cocoapods" {
+		t.Fatalf("skipped = %#v, want CocoaPods dependency", skipped)
 	}
 }
 
@@ -267,6 +296,100 @@ func TestSyncVulnerabilitiesForDepsBatchErrorIdentifiesDependency(t *testing.T) 
 		t.Fatal("expected sync error")
 	}
 	for _, want := range []string{"pkg:npm/foo", "package-lock.json", "invalid ecosystem"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not include %q", err, want)
+		}
+	}
+}
+
+func TestQueryOSVBatchesAppliesErrorOffset(t *testing.T) {
+	deps := make([]database.Dependency, osvBatchSize+1)
+	for i := range deps {
+		deps[i] = database.Dependency{
+			Ecosystem:    "npm",
+			Name:         fmt.Sprintf("pkg-%04d", i),
+			ManifestPath: fmt.Sprintf("locks/%04d.json", i),
+		}
+	}
+	queries, skipped := buildOSVQueries(deps, false)
+	if len(skipped) != 0 {
+		t.Fatalf("skipped = %#v, want none", skipped)
+	}
+
+	source := &mockSource{
+		batchRes:  make([][]vulns.Vulnerability, osvBatchSize),
+		batchErrs: []error{nil, errors.New("batch query failed with status 400: error in query at index 0: invalid ecosystem")},
+	}
+	_, err := queryOSVBatches(context.Background(), source, queries)
+	if err == nil {
+		t.Fatal("expected batch error")
+	}
+	if source.batchCalls != 2 {
+		t.Errorf("batch calls = %d, want 2", source.batchCalls)
+	}
+	for _, want := range []string{"pkg:npm/pkg-1000", "locks/1000.json", "invalid ecosystem"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not include %q", err, want)
+		}
+	}
+}
+
+func TestScanLiveWithSourceSkipsUnsupportedEcosystems(t *testing.T) {
+	source := &mockSource{batchRes: [][]vulns.Vulnerability{nil}}
+	deps := []database.Dependency{
+		{Ecosystem: "swift", Name: "example", Requirement: "1.0.0", ManifestPath: "Package.resolved", ManifestKind: "lockfile"},
+		{Ecosystem: "cocoapods", Name: "Alamofire", Requirement: "5.0.0", ManifestPath: "Podfile.lock", ManifestKind: "lockfile"},
+	}
+
+	results, skipped, err := scanLiveWithSource(source, deps, allSeverities)
+	if err != nil {
+		t.Fatalf("scanLiveWithSource() error = %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("results = %#v, want none", results)
+	}
+	if len(source.batchPURLs) != 1 || source.batchPURLs[0].Type != "SwiftURL" {
+		t.Fatalf("OSV query PURLs = %#v, want one SwiftURL query", source.batchPURLs)
+	}
+	if len(skipped) != 1 || skipped[0].ManifestPath != "Podfile.lock" {
+		t.Fatalf("skipped = %#v, want CocoaPods dependency", skipped)
+	}
+}
+
+func TestScanLiveWithSourceWithOnlyUnsupportedEcosystems(t *testing.T) {
+	source := &mockSource{}
+	deps := []database.Dependency{
+		{Ecosystem: "cocoapods", Name: "Alamofire", Requirement: "5.0.0", ManifestPath: "Podfile.lock", ManifestKind: "lockfile"},
+	}
+
+	results, skipped, err := scanLiveWithSource(source, deps, allSeverities)
+	if err != nil {
+		t.Fatalf("scanLiveWithSource() error = %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("results = %#v, want none", results)
+	}
+	if source.batchCalls != 0 {
+		t.Errorf("batch calls = %d, want 0", source.batchCalls)
+	}
+	if len(skipped) != 1 || skipped[0].ManifestPath != "Podfile.lock" {
+		t.Fatalf("skipped = %#v, want CocoaPods dependency", skipped)
+	}
+}
+
+func TestScanLiveWithSourceBatchErrorIdentifiesDependency(t *testing.T) {
+	source := &mockSource{
+		batchErr: errors.New("batch query failed with status 400: error in query at index 0: invalid ecosystem"),
+	}
+	deps := []database.Dependency{
+		{Ecosystem: "npm", Name: "foo", Requirement: "1.0.0", ManifestPath: "package-lock.json", ManifestKind: "lockfile"},
+	}
+
+	_, _, err := scanLiveWithSource(source, deps, allSeverities)
+	if err == nil {
+		t.Fatal("expected live scan error")
+	}
+	for _, want := range []string{"pkg:npm/foo@1.0.0", "package-lock.json", "invalid ecosystem"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not include %q", err, want)
 		}

@@ -39,9 +39,12 @@ const (
 var severityOrder = map[string]int{"critical": 0, "high": 1, "medium": 2, "low": 3, "unknown": 4}
 
 type osvQuery struct {
-	dependency database.Dependency
-	purl       *purl.PURL
+	dependency  database.Dependency
+	purl        *purl.PURL
+	requestPURL *purl.PURL
 }
+
+const osvBatchSize = 1000
 
 func buildOSVQueries(deps []database.Dependency, includeVersion bool) (queries []osvQuery, skipped []database.Dependency) {
 	for _, dep := range deps {
@@ -51,14 +54,65 @@ func buildOSVQueries(deps []database.Dependency, includeVersion bool) (queries [
 		}
 
 		packagePURL := purl.MakePURL(dep.Ecosystem, dep.Name, version)
-		if _, ok := purl.PURLTypeToOSV(packagePURL.Type); !ok {
+		osvEcosystem, ok := osvEcosystemForPURLType(packagePURL.Type)
+		if !ok {
 			skipped = append(skipped, dep)
 			continue
 		}
 
-		queries = append(queries, osvQuery{dependency: dep, purl: packagePURL})
+		// The OSV client maps the PURL type to an OSV ecosystem name internally.
+		// Set the type to the API name here for types missing from that mapping.
+		requestPURL := *packagePURL
+		requestPURL.Type = osvEcosystem
+		queries = append(queries, osvQuery{
+			dependency:  dep,
+			purl:        packagePURL,
+			requestPURL: &requestPURL,
+		})
 	}
 	return queries, skipped
+}
+
+// osvEcosystemForPURLType maps PURL types to names accepted by OSV's query API.
+func osvEcosystemForPURLType(purlType string) (string, bool) {
+	switch purlType {
+	case "cargo":
+		return "crates.io", true
+	case "composer":
+		return "Packagist", true
+	case "conan":
+		return "ConanCenter", true
+	case "cran":
+		return "CRAN", true
+	case "gem":
+		return "RubyGems", true
+	case "githubactions":
+		return "GitHub Actions", true
+	case "golang":
+		return "Go", true
+	case "hackage":
+		return "Hackage", true
+	case "hex":
+		return "Hex", true
+	case "julia":
+		return "Julia", true
+	case "maven":
+		return "Maven", true
+	case "npm":
+		return "npm", true
+	case "nuget":
+		return "NuGet", true
+	case "opam":
+		return "opam", true
+	case "pub":
+		return "Pub", true
+	case "pypi":
+		return "PyPI", true
+	case "swift":
+		return "SwiftURL", true
+	default:
+		return "", false
+	}
 }
 
 func reportSkippedOSVDependencies(w io.Writer, skipped []database.Dependency) {
@@ -67,8 +121,10 @@ func reportSkippedOSVDependencies(w io.Writer, skipped []database.Dependency) {
 	}
 
 	labels := make(map[string]bool, len(skipped))
+	ecosystems := make(map[string]bool, len(skipped))
 	for _, dep := range skipped {
 		label := dep.Ecosystem
+		ecosystems[dep.Ecosystem] = true
 		if dep.ManifestPath != "" {
 			label += " (" + dep.ManifestPath + ")"
 		}
@@ -81,20 +137,47 @@ func reportSkippedOSVDependencies(w io.Writer, skipped []database.Dependency) {
 	}
 	sort.Strings(values)
 
-	label := "ecosystem"
-	if len(values) > 1 {
-		label = "ecosystems"
+	dependencyLabel := "dependency"
+	if len(skipped) != 1 {
+		dependencyLabel = "dependencies"
+	}
+	ecosystemLabel := "ecosystem"
+	if len(ecosystems) != 1 {
+		ecosystemLabel = "ecosystems"
 	}
 	_, _ = fmt.Fprintf(
 		w,
-		"Skipping %d dependencies from unsupported OSV %s: %s.\n",
+		"Skipping %d %s from unsupported OSV %s: %s.\n",
 		len(skipped),
-		label,
+		dependencyLabel,
+		ecosystemLabel,
 		strings.Join(values, ", "),
 	)
 }
 
-func wrapOSVBatchError(err error, queries []osvQuery) error {
+func queryOSVBatches(ctx context.Context, source vulns.Source, queries []osvQuery) ([][]vulns.Vulnerability, error) {
+	var allResults [][]vulns.Vulnerability
+	for start := 0; start < len(queries); start += osvBatchSize {
+		end := start + osvBatchSize
+		if end > len(queries) {
+			end = len(queries)
+		}
+
+		requestPURLs := make([]*purl.PURL, 0, end-start)
+		for _, query := range queries[start:end] {
+			requestPURLs = append(requestPURLs, query.requestPURL)
+		}
+
+		results, err := source.QueryBatch(ctx, requestPURLs)
+		if err != nil {
+			return nil, wrapOSVBatchError(err, queries, start)
+		}
+		allResults = append(allResults, results...)
+	}
+	return allResults, nil
+}
+
+func wrapOSVBatchError(err error, queries []osvQuery, batchOffset int) error {
 	const marker = "error in query at index "
 
 	remainder, found := strings.CutPrefix(err.Error(), marker)
@@ -111,7 +194,11 @@ func wrapOSVBatchError(err error, queries []osvQuery) error {
 		return fmt.Errorf("querying OSV: %w", err)
 	}
 	index, parseErr := strconv.Atoi(indexText)
-	if parseErr != nil || index < 0 || index >= len(queries) {
+	if parseErr != nil {
+		return fmt.Errorf("querying OSV: %w", err)
+	}
+	index += batchOffset
+	if index < 0 || index >= len(queries) {
 		return fmt.Errorf("querying OSV: %w", err)
 	}
 
@@ -217,39 +304,29 @@ func syncVulnerabilitiesForDeps(db *database.DB, source vulns.Source, lockfileDe
 		return nil
 	}
 
-	// Group by ecosystem+name for unique packages.
-	type pkgKey struct {
-		ecosystem string
-		name      string
-	}
-	uniquePkgs := make(map[pkgKey]database.Dependency)
-	for _, d := range lockfileDeps {
-		key := pkgKey{d.Ecosystem, d.Name}
-		if _, ok := uniquePkgs[key]; !ok {
-			uniquePkgs[key] = d
-		}
-	}
-
-	keys := make([]pkgKey, 0, len(uniquePkgs))
-	for key := range uniquePkgs {
-		keys = append(keys, key)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		if keys[i].ecosystem != keys[j].ecosystem {
-			return keys[i].ecosystem < keys[j].ecosystem
-		}
-		return keys[i].name < keys[j].name
-	})
-
-	uniqueDeps := make([]database.Dependency, 0, len(keys))
-	for _, key := range keys {
-		uniqueDeps = append(uniqueDeps, uniquePkgs[key])
-	}
-
-	queries, skipped := buildOSVQueries(uniqueDeps, false)
+	queries, skipped := buildOSVQueries(lockfileDeps, false)
 	if !quiet {
 		reportSkippedOSVDependencies(w, skipped)
 	}
+
+	// Report every skipped source, but query each package only once.
+	uniqueQueries := make(map[string]osvQuery, len(queries))
+	for _, query := range queries {
+		purlStr := query.purl.String()
+		if _, ok := uniqueQueries[purlStr]; !ok {
+			uniqueQueries[purlStr] = query
+		}
+	}
+	keys := make([]string, 0, len(uniqueQueries))
+	for key := range uniqueQueries {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	queries = make([]osvQuery, 0, len(keys))
+	for _, key := range keys {
+		queries = append(queries, uniqueQueries[key])
+	}
+
 	if len(queries) == 0 {
 		if !quiet {
 			_, _ = fmt.Fprintln(w, "No dependencies with OSV-supported ecosystems to sync.")
@@ -286,15 +363,11 @@ func syncVulnerabilitiesForDeps(db *database.DB, source vulns.Source, lockfileDe
 		return nil
 	}
 	queries = pending
-	purls := make([]*purl.PURL, len(queries))
-	for i, query := range queries {
-		purls[i] = query.purl
-	}
 
 	// Query OSV in batches to get vuln IDs
-	results, err := source.QueryBatch(ctx, purls)
+	results, err := queryOSVBatches(ctx, source, queries)
 	if err != nil {
-		return wrapOSVBatchError(err, queries)
+		return err
 	}
 
 	// Collect unique vuln IDs across all batch results
@@ -442,7 +515,7 @@ func syncVulnerabilitiesForDeps(db *database.DB, source vulns.Source, lockfileDe
 	}
 
 	if !quiet {
-		_, _ = fmt.Fprintf(w, "Synced %d vulnerabilities for %d packages.\n", totalVulns, len(purls))
+		_, _ = fmt.Fprintf(w, "Synced %d vulnerabilities for %d packages.\n", totalVulns, len(queries))
 	}
 
 	return nil
@@ -606,22 +679,21 @@ func runVulnsScan(cmd *cobra.Command, args []string) error {
 
 func scanLive(deps []database.Dependency, minSeverity int) ([]VulnResult, []database.Dependency, error) {
 	source := osv.New(osv.WithUserAgent(userAgent))
+	return scanLiveWithSource(source, deps, minSeverity)
+}
+
+func scanLiveWithSource(source vulns.Source, deps []database.Dependency, minSeverity int) ([]VulnResult, []database.Dependency, error) {
 	queries, skipped := buildOSVQueries(deps, true)
 	if len(queries) == 0 {
 		return nil, skipped, nil
 	}
 
-	purls := make([]*purl.PURL, len(queries))
-	for i, query := range queries {
-		purls[i] = query.purl
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), vulnsQueryTimeout)
 	defer cancel()
 
-	results, err := source.QueryBatch(ctx, purls)
+	results, err := queryOSVBatches(ctx, source, queries)
 	if err != nil {
-		return nil, skipped, wrapOSVBatchError(err, queries)
+		return nil, skipped, err
 	}
 
 	var vulnResults []VulnResult
