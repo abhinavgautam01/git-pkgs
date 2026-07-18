@@ -44,6 +44,8 @@ type osvQuery struct {
 	requestPURL *purl.PURL
 }
 
+// osvBatchSize must not exceed the OSV client's internal batch size so error
+// indexes can be offset to the original query list.
 const osvBatchSize = 1000
 
 func buildOSVQueries(deps []database.Dependency, includeVersion bool) (queries []osvQuery, skipped []database.Dependency) {
@@ -54,16 +56,18 @@ func buildOSVQueries(deps []database.Dependency, includeVersion bool) (queries [
 		}
 
 		packagePURL := purl.MakePURL(dep.Ecosystem, dep.Name, version)
-		osvEcosystem, ok := osvEcosystemForPURLType(packagePURL.Type)
-		if !ok {
+		osvEcosystem, supported, overrideType := osvEcosystemForPURLType(packagePURL.Type)
+		if !supported {
 			skipped = append(skipped, dep)
 			continue
 		}
 
-		// The OSV client maps the PURL type to an OSV ecosystem name internally.
-		// Set the type to the API name here for types missing from that mapping.
+		// Preserve native types for the client's existing mappings. In particular,
+		// Maven's FullName uses its lowercase type to retain the group:artifact form.
 		requestPURL := *packagePURL
-		requestPURL.Type = osvEcosystem
+		if overrideType {
+			requestPURL.Type = osvEcosystem
+		}
 		queries = append(queries, osvQuery{
 			dependency:  dep,
 			purl:        packagePURL,
@@ -74,44 +78,46 @@ func buildOSVQueries(deps []database.Dependency, includeVersion bool) (queries [
 }
 
 // osvEcosystemForPURLType maps PURL types to names accepted by OSV's query API.
-func osvEcosystemForPURLType(purlType string) (string, bool) {
+// The third return value indicates that the vulns client lacks this mapping and
+// needs the PURL type temporarily replaced with the API ecosystem name.
+func osvEcosystemForPURLType(purlType string) (string, bool, bool) {
 	switch purlType {
 	case "cargo":
-		return "crates.io", true
+		return "crates.io", true, false
 	case "composer":
-		return "Packagist", true
+		return "Packagist", true, false
 	case "conan":
-		return "ConanCenter", true
+		return "ConanCenter", true, true
 	case "cran":
-		return "CRAN", true
+		return "CRAN", true, true
 	case "gem":
-		return "RubyGems", true
+		return "RubyGems", true, false
 	case "githubactions":
-		return "GitHub Actions", true
+		return "GitHub Actions", true, false
 	case "golang":
-		return "Go", true
+		return "Go", true, false
 	case "hackage":
-		return "Hackage", true
+		return "Hackage", true, true
 	case "hex":
-		return "Hex", true
+		return "Hex", true, false
 	case "julia":
-		return "Julia", true
+		return "Julia", true, true
 	case "maven":
-		return "Maven", true
+		return "Maven", true, false
 	case "npm":
-		return "npm", true
+		return "npm", true, false
 	case "nuget":
-		return "NuGet", true
+		return "NuGet", true, false
 	case "opam":
-		return "opam", true
+		return "opam", true, true
 	case "pub":
-		return "Pub", true
+		return "Pub", true, false
 	case "pypi":
-		return "PyPI", true
+		return "PyPI", true, false
 	case "swift":
-		return "SwiftURL", true
+		return "SwiftURL", true, true
 	default:
-		return "", false
+		return "", false, false
 	}
 }
 

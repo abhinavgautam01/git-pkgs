@@ -245,18 +245,25 @@ func TestSyncVulnerabilitiesForDepsSkipsUnsupportedEcosystems(t *testing.T) {
 func TestBuildOSVQueriesUsesCurrentAPIMapping(t *testing.T) {
 	deps := []database.Dependency{
 		{Ecosystem: "swift", Name: "example", Requirement: "1.0.0", ManifestPath: "Package.resolved", ManifestKind: "lockfile"},
+		{Ecosystem: "maven", Name: "org.apache.commons:commons-text", Requirement: "1.9", ManifestPath: "pom.xml", ManifestKind: "lockfile"},
 		{Ecosystem: "cocoapods", Name: "Alamofire", Requirement: "5.0.0", ManifestPath: "Podfile.lock", ManifestKind: "lockfile"},
 	}
 
 	queries, skipped := buildOSVQueries(deps, true)
-	if len(queries) != 1 {
-		t.Fatalf("queries = %d, want 1", len(queries))
+	if len(queries) != 2 {
+		t.Fatalf("queries = %d, want 2", len(queries))
 	}
 	if got := queries[0].purl.String(); got != "pkg:swift/example@1.0.0" {
 		t.Errorf("PURL = %q, want pkg:swift/example@1.0.0", got)
 	}
 	if got := queries[0].requestPURL.Type; got != "SwiftURL" {
 		t.Errorf("OSV request type = %q, want SwiftURL", got)
+	}
+	if got := queries[1].requestPURL.Type; got != "maven" {
+		t.Errorf("Maven request type = %q, want maven", got)
+	}
+	if got := queries[1].requestPURL.FullName(); got != "org.apache.commons:commons-text" {
+		t.Errorf("Maven request name = %q, want org.apache.commons:commons-text", got)
 	}
 	if len(skipped) != 1 || skipped[0].Ecosystem != "cocoapods" {
 		t.Fatalf("skipped = %#v, want CocoaPods dependency", skipped)
