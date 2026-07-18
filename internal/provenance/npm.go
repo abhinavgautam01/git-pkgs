@@ -20,10 +20,9 @@ func (c *Client) lookupNPM(ctx context.Context, dep Dependency) Result {
 
 	if hasValue(body.Dist.Attestations) || hasValue(body.Dist.Provenance) {
 		return Result{
-			Status:             StatusTrustedPublishing,
-			TrustedPublishing:  true,
+			Status:             StatusAttested,
 			RegistrySignatures: len(body.Dist.Signatures),
-			Evidence:           []string{"npm registry attestation"},
+			Evidence:           []string{"npm registry attestation; publishing authentication is not verifiable"},
 		}
 	}
 	if len(body.Dist.Signatures) > 0 {

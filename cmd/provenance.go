@@ -20,6 +20,7 @@ const provenanceLookupConcurrency = 8
 
 const (
 	provenanceStatusTrustedPublishing = provenance.StatusTrustedPublishing
+	provenanceStatusAttested          = provenance.StatusAttested
 	provenanceStatusSigned            = provenance.StatusSigned
 	provenanceStatusMissing           = provenance.StatusMissing
 	provenanceStatusUnsupported       = provenance.StatusUnsupported
@@ -32,9 +33,10 @@ func addProvenanceCmd(parent *cobra.Command) {
 		Short: "Check dependency provenance metadata",
 		Long: `Check resolved dependencies for registry provenance and attestation metadata.
 
-The command reports trusted-publishing attestations where registry APIs expose
-them, registry signatures as a weaker integrity signal, and unsupported
-ecosystems explicitly instead of treating missing metadata as verified.`,
+The command reports verified trusted-publishing signals where registry APIs
+expose them, registry attestations and signatures as weaker integrity signals,
+and unsupported ecosystems explicitly instead of treating missing metadata as
+verified.`,
 		RunE: runProvenance,
 	}
 
@@ -50,6 +52,7 @@ type ProvenanceSummary struct {
 	TotalDependencies      int `json:"total_dependencies"`
 	CheckedDependencies    int `json:"checked_dependencies"`
 	TrustedPublishing      int `json:"trusted_publishing"`
+	AttestedDependencies   int `json:"attested_dependencies"`
 	RegistrySignatures     int `json:"registry_signatures"`
 	WithoutProvenance      int `json:"without_provenance"`
 	UnsupportedEcosystems  int `json:"unsupported_ecosystems"`
@@ -258,11 +261,15 @@ func buildProvenanceResult(
 		}
 		result.Summary.CheckedDependencies++
 
+		if data.RegistrySignatures > 0 {
+			result.Summary.RegistrySignatures++
+		}
 		switch data.Status {
 		case provenanceStatusTrustedPublishing:
 			result.Summary.TrustedPublishing++
+		case provenanceStatusAttested:
+			result.Summary.AttestedDependencies++
 		case provenanceStatusSigned:
-			result.Summary.RegistrySignatures++
 			result.Summary.WithoutProvenance++
 		case provenanceStatusMissing:
 			result.Summary.WithoutProvenance++
@@ -356,9 +363,10 @@ func outputProvenanceText(cmd *cobra.Command, result *ProvenanceResult, showMiss
 
 	_, _ = fmt.Fprintln(cmd.OutOrStdout())
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(),
-		"Checked: %d, trusted publishing: %d, registry signatures: %d, without provenance: %d, unsupported: %d, errors: %d\n",
+		"Checked: %d, trusted publishing: %d, attested: %d, registry signatures: %d, without provenance: %d, unsupported: %d, errors: %d\n",
 		result.Summary.CheckedDependencies,
 		result.Summary.TrustedPublishing,
+		result.Summary.AttestedDependencies,
 		result.Summary.RegistrySignatures,
 		result.Summary.WithoutProvenance,
 		result.Summary.UnsupportedEcosystems,

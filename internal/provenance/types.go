@@ -9,6 +9,7 @@ type Status string
 
 const (
 	StatusTrustedPublishing Status = "trusted_publishing"
+	StatusAttested          Status = "attested"
 	StatusSigned            Status = "signed"
 	StatusMissing           Status = "missing"
 	StatusUnsupported       Status = "unsupported"

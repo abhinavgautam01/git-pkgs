@@ -50,7 +50,7 @@ git pkgs deprecated     # find deprecated installed versions
 git pkgs funding        # show packages with funding links
 git pkgs maintainers    # show dependency maintainer counts
 git pkgs health         # score dependency maintenance health
-git pkgs provenance     # check trusted-publishing provenance
+git pkgs provenance     # check provenance metadata
 git pkgs changelog lodash -e npm --from 4.17.20 --to 4.17.21  # view changelog
 git pkgs update         # update all dependencies
 git pkgs add lodash     # add a package
@@ -331,7 +331,7 @@ git pkgs provenance --ecosystem=npm
 git pkgs provenance --format=json
 ```
 
-Checks exact installed versions for registry attestation metadata. Trusted-publishing attestations are reported when registries expose them; npm registry signatures are shown as a weaker integrity signal. Unsupported ecosystems and lookup errors are reported explicitly.
+Checks exact installed versions for registry attestation metadata. Verified trusted-publishing signals are reported where registries expose them; npm attestations are reported separately because their metadata does not identify OIDC publishing. Registry signatures are shown as a weaker integrity signal. Unsupported ecosystems and lookup errors are reported explicitly.
 
 ### View changelogs
 

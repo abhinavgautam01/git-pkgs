@@ -54,6 +54,13 @@ func TestBuildProvenanceResultMissingFilter(t *testing.T) {
 			ManifestKind: manifestKindLockfile,
 		},
 		{
+			Name:         "attested",
+			Ecosystem:    "npm",
+			Requirement:  "1.0.0",
+			ManifestPath: "package-lock.json",
+			ManifestKind: manifestKindLockfile,
+		},
+		{
 			Name:         "serde",
 			Ecosystem:    "cargo",
 			Requirement:  "1.0.0",
@@ -71,6 +78,11 @@ func TestBuildProvenanceResultMissingFilter(t *testing.T) {
 			Status:             provenanceStatusSigned,
 			RegistrySignatures: 1,
 		},
+		"pkg:npm/attested@1.0.0": {
+			Status:             provenanceStatusAttested,
+			RegistrySignatures: 1,
+			Evidence:           []string{"npm registry attestation; publishing authentication is not verifiable"},
+		},
 		"pkg:cargo/serde@1.0.0": {
 			Status:   provenanceStatusUnsupported,
 			Evidence: []string{"provenance lookup is only supported for npm, pypi, and rubygems"},
@@ -78,14 +90,17 @@ func TestBuildProvenanceResultMissingFilter(t *testing.T) {
 	}
 
 	result := buildProvenanceResult(deps, 1, lookupData, true)
-	if result.Summary.TotalDependencies != 3 {
-		t.Fatalf("total dependencies = %d, want 3", result.Summary.TotalDependencies)
+	if result.Summary.TotalDependencies != 4 {
+		t.Fatalf("total dependencies = %d, want 4", result.Summary.TotalDependencies)
 	}
 	if result.Summary.TrustedPublishing != 1 {
 		t.Fatalf("trusted publishing = %d, want 1", result.Summary.TrustedPublishing)
 	}
-	if result.Summary.RegistrySignatures != 1 {
-		t.Fatalf("registry signatures = %d, want 1", result.Summary.RegistrySignatures)
+	if result.Summary.AttestedDependencies != 1 {
+		t.Fatalf("attested dependencies = %d, want 1", result.Summary.AttestedDependencies)
+	}
+	if result.Summary.RegistrySignatures != 2 {
+		t.Fatalf("registry signatures = %d, want 2", result.Summary.RegistrySignatures)
 	}
 	if result.Summary.WithoutProvenance != 1 {
 		t.Fatalf("without provenance = %d, want 1", result.Summary.WithoutProvenance)
@@ -96,8 +111,8 @@ func TestBuildProvenanceResultMissingFilter(t *testing.T) {
 	if result.Summary.UnresolvedDependencies != 1 {
 		t.Fatalf("unresolved dependencies = %d, want 1", result.Summary.UnresolvedDependencies)
 	}
-	if len(result.Dependencies) != 2 {
-		t.Fatalf("dependencies length = %d, want 2", len(result.Dependencies))
+	if len(result.Dependencies) != 3 {
+		t.Fatalf("dependencies length = %d, want 3", len(result.Dependencies))
 	}
 	for _, dep := range result.Dependencies {
 		if dep.TrustedPublishing {
@@ -105,6 +120,9 @@ func TestBuildProvenanceResultMissingFilter(t *testing.T) {
 		}
 		if dep.Status == string(provenanceStatusUnsupported) && dep.Error != "" {
 			t.Fatalf("unsupported dependency should not be reported as error: %#v", dep)
+		}
+		if dep.Name == "attested" && dep.Status != string(provenanceStatusAttested) {
+			t.Fatalf("attested dependency = %#v, want attested status", dep)
 		}
 	}
 }

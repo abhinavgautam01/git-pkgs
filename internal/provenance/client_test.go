@@ -35,7 +35,7 @@ func newFakeClient(responses map[string]fakeResponse) (*Client, *fakeHTTPClient)
 	return NewClientWithHTTPClient("git-pkgs/test", fake), fake
 }
 
-func TestLookupNPMTrustedPublishing(t *testing.T) {
+func TestLookupNPMRegistryAttestationIsNotTrustedPublishing(t *testing.T) {
 	client, _ := newFakeClient(map[string]fakeResponse{
 		"https://registry.npmjs.org/@scope%2Fpkg/1.2.3": {
 			status: http.StatusOK,
@@ -44,11 +44,14 @@ func TestLookupNPMTrustedPublishing(t *testing.T) {
 	})
 
 	got := client.Lookup(context.Background(), Dependency{Ecosystem: "npm", Name: "@scope/pkg", Version: "1.2.3"})
-	if got.Status != StatusTrustedPublishing || !got.TrustedPublishing {
-		t.Fatalf("result = %#v, want trusted publishing", got)
+	if got.Status != StatusAttested || got.TrustedPublishing {
+		t.Fatalf("result = %#v, want attested without trusted publishing", got)
 	}
 	if got.RegistrySignatures != 1 {
 		t.Fatalf("registry signatures = %d, want 1", got.RegistrySignatures)
+	}
+	if len(got.Evidence) != 1 || got.Evidence[0] != "npm registry attestation; publishing authentication is not verifiable" {
+		t.Fatalf("evidence = %#v, want authentication caveat", got.Evidence)
 	}
 }
 
