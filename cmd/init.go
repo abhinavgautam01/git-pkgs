@@ -77,6 +77,11 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 	defer func() { _ = db.Close() }()
 
+	ecosystemFilter, err := repo.EcosystemFilter()
+	if err != nil {
+		return fmt.Errorf("loading ecosystem config: %w", err)
+	}
+
 	idx := indexer.New(repo, db, indexer.Options{
 		Branch:           branch,
 		Since:            since,
@@ -84,6 +89,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		Quiet:            quiet,
 		BatchSize:        batchSize,
 		SnapshotInterval: snapshotInterval,
+		EcosystemFilter:  ecosystemFilter,
 	})
 
 	result, err := idx.Run()

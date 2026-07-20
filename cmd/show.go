@@ -48,6 +48,12 @@ func runShow(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	ecosystemFilter, err := repo.EcosystemFilter()
+	if err != nil {
+		return fmt.Errorf("loading ecosystem config: %w", err)
+	}
+	changes = filterChangesByEcosystemConfig(changes, ecosystemFilter.Allows)
+
 	// Apply ecosystem filter
 	if ecosystem != "" {
 		var filtered []database.Change
@@ -70,6 +76,19 @@ func runShow(cmd *cobra.Command, args []string) error {
 		}
 		return outputShowText(cmd, changes)
 	}
+}
+
+func filterChangesByEcosystemConfig(changes []database.Change, allows func(string) bool) []database.Change {
+	if len(changes) == 0 {
+		return changes
+	}
+	filtered := make([]database.Change, 0, len(changes))
+	for _, c := range changes {
+		if allows(c.Ecosystem) {
+			filtered = append(filtered, c)
+		}
+	}
+	return filtered
 }
 
 // getChangesForCommit returns the dependency changes introduced in a specific commit.

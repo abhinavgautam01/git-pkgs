@@ -33,7 +33,7 @@ func runStale(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	_, db, err := openDatabase()
+	repo, db, err := openDatabase()
 	if err != nil {
 		return err
 	}
@@ -43,8 +43,17 @@ func runStale(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	ecosystemFilter, err := repo.EcosystemFilter()
+	if err != nil {
+		return fmt.Errorf("loading ecosystem config: %w", err)
+	}
 
-	entries, err := db.GetStaleDependencies(branchInfo.ID, ecosystem, days)
+	entries, err := db.GetStaleDependencies(database.StaleOptions{
+		EcosystemFilterOptions: databaseEcosystemFilterOptions(ecosystemFilter),
+		BranchID:               branchInfo.ID,
+		Ecosystem:              ecosystem,
+		Days:                   days,
+	})
 	if err != nil {
 		return fmt.Errorf("getting stale dependencies: %w", err)
 	}

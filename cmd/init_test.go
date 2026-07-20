@@ -73,6 +73,15 @@ func setGitUser(t *testing.T, repoDir, name, email string) {
 	}
 }
 
+func setGitConfig(t *testing.T, repoDir, key, value string) {
+	t.Helper()
+	gitCmd := exec.Command("git", "config", key, value)
+	gitCmd.Dir = repoDir
+	if err := gitCmd.Run(); err != nil {
+		t.Fatalf("failed to set git config %s: %v", key, err)
+	}
+}
+
 func chdir(t *testing.T, dir string) func() {
 	t.Helper()
 	oldWd, err := os.Getwd()
@@ -208,6 +217,74 @@ func TestInitCommand(t *testing.T) {
 		}
 		if count != 1 {
 			t.Errorf("expected 1 branch after init, got %d", count)
+		}
+	})
+
+	t.Run("respects ignored ecosystem config", func(t *testing.T) {
+		repoDir := createTestRepo(t)
+		addFileAndCommit(t, repoDir, "package.json", packageJSON, "Add package.json")
+		addFileAndCommit(t, repoDir, "Gemfile", "source \"https://rubygems.org\"\ngem \"rails\", \"~> 7.0\"\n", "Add Gemfile")
+
+		gitCmd := exec.Command("git", "config", "--add", "pkgs.ignoredEcosystems", "npm")
+		gitCmd.Dir = repoDir
+		if err := gitCmd.Run(); err != nil {
+			t.Fatalf("failed to configure ignored ecosystem: %v", err)
+		}
+
+		cleanup := chdir(t, repoDir)
+		defer cleanup()
+
+		if _, _, err := runCmd(t, "init", "--no-hooks"); err != nil {
+			t.Fatalf("init failed: %v", err)
+		}
+
+		db, err := database.Open(filepath.Join(repoDir, ".git", "pkgs.sqlite3"))
+		if err != nil {
+			t.Fatalf("failed to open db: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		var npmCount int
+		if err := db.QueryRow("SELECT COUNT(*) FROM dependency_snapshots WHERE ecosystem = 'npm'").Scan(&npmCount); err != nil {
+			t.Fatalf("failed to count npm snapshots: %v", err)
+		}
+		if npmCount != 0 {
+			t.Fatalf("expected no npm snapshots, got %d", npmCount)
+		}
+
+		var rubyCount int
+		if err := db.QueryRow("SELECT COUNT(*) FROM dependency_snapshots WHERE ecosystem IN ('gem', 'rubygems')").Scan(&rubyCount); err != nil {
+			t.Fatalf("failed to count RubyGems snapshots: %v", err)
+		}
+		if rubyCount == 0 {
+			t.Fatal("expected RubyGems snapshots to remain indexed")
+		}
+	})
+
+	t.Run("normalizes go ecosystem alias in config", func(t *testing.T) {
+		repoDir := createTestRepo(t)
+		addFileAndCommit(t, repoDir, "go.mod", "module example.com/test\n\ngo 1.23\n\nrequire github.com/stretchr/testify v1.9.0\n", "Add Go module")
+		setGitConfig(t, repoDir, "pkgs.ignoredEcosystems", "go")
+
+		cleanup := chdir(t, repoDir)
+		defer cleanup()
+
+		if _, _, err := runCmd(t, "init", "--no-hooks"); err != nil {
+			t.Fatalf("init failed: %v", err)
+		}
+
+		db, err := database.Open(filepath.Join(repoDir, ".git", "pkgs.sqlite3"))
+		if err != nil {
+			t.Fatalf("failed to open db: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		var count int
+		if err := db.QueryRow("SELECT COUNT(*) FROM dependency_snapshots WHERE ecosystem = 'golang'").Scan(&count); err != nil {
+			t.Fatalf("failed to count Go snapshots: %v", err)
+		}
+		if count != 0 {
+			t.Fatalf("expected go alias to exclude golang snapshots, got %d", count)
 		}
 	})
 

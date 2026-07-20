@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/git-pkgs/git-pkgs/internal/analyzer"
+	"github.com/git-pkgs/git-pkgs/internal/config"
 	"github.com/git-pkgs/git-pkgs/internal/database"
 	"github.com/git-pkgs/git-pkgs/internal/git"
 	"github.com/git-pkgs/git-pkgs/internal/progress"
@@ -21,6 +22,7 @@ type Options struct {
 	Incremental      bool // Use existing branch and continue from last SHA
 	BatchSize        int  // Commits to buffer before flushing (default 500)
 	SnapshotInterval int  // Store snapshot every N commits with changes (default 50)
+	EcosystemFilter  config.EcosystemFilter
 }
 
 type Result struct {
@@ -121,6 +123,7 @@ func (idx *Indexer) Run() (*Result, error) {
 			return nil, fmt.Errorf("getting last snapshot: %w", err)
 		}
 		snapshot = convertDBSnapshot(dbSnapshot)
+		snapshot = filterSnapshot(snapshot, idx.opts.EcosystemFilter)
 	} else {
 		if err := writer.CreateBranch(branch); err != nil {
 			return nil, fmt.Errorf("creating branch: %w", err)
@@ -140,6 +143,7 @@ func (idx *Indexer) Run() (*Result, error) {
 	idx.progress.Println("Analyzing %d commits on %s...", len(commits), branch)
 
 	idx.analyzer.SetRepoPath(idx.repo.WorkDir())
+	idx.analyzer.SetEcosystemFilter(idx.opts.EcosystemFilter)
 
 	refs := <-refCh
 	tagsBySHA := refs.tags
@@ -338,6 +342,19 @@ func (idx *Indexer) Run() (*Result, error) {
 	}
 
 	return result, nil
+}
+
+func filterSnapshot(snapshot analyzer.Snapshot, filter config.EcosystemFilter) analyzer.Snapshot {
+	if filter.Empty() {
+		return snapshot
+	}
+	filtered := make(analyzer.Snapshot, len(snapshot))
+	for key, entry := range snapshot {
+		if filter.Allows(entry.Ecosystem) {
+			filtered[key] = entry
+		}
+	}
+	return filtered
 }
 
 func convertDBSnapshot(dbSnapshot map[string]database.SnapshotInfo) analyzer.Snapshot {

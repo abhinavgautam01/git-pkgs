@@ -42,7 +42,7 @@ func runStats(cmd *cobra.Command, args []string) error {
 	byAuthor, _ := cmd.Flags().GetBool("by-author")
 	excludeBots, _ := cmd.Flags().GetBool("exclude-bots")
 
-	_, db, err := openDatabase()
+	repo, db, err := openDatabase()
 	if err != nil {
 		return err
 	}
@@ -52,14 +52,19 @@ func runStats(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	ecosystemFilter, err := repo.EcosystemFilter()
+	if err != nil {
+		return fmt.Errorf("loading ecosystem config: %w", err)
+	}
 
 	opts := database.StatsOptions{
-		BranchID:    branchInfo.ID,
-		Ecosystem:   ecosystem,
-		Since:       since,
-		Until:       until,
-		Limit:       limit,
-		ExcludeBots: excludeBots,
+		EcosystemFilterOptions: databaseEcosystemFilterOptions(ecosystemFilter),
+		BranchID:               branchInfo.ID,
+		Ecosystem:              ecosystem,
+		Since:                  since,
+		Until:                  until,
+		Limit:                  limit,
+		ExcludeBots:            excludeBots,
 	}
 
 	if byAuthor {

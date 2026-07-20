@@ -71,11 +71,17 @@ func reindexBranch(cmd *cobra.Command, repo *git.Repository, db *database.DB, br
 	_, branchErr := db.GetBranch(branch)
 	incremental := branchErr == nil
 
+	ecosystemFilter, err := repo.EcosystemFilter()
+	if err != nil {
+		return fmt.Errorf("loading ecosystem config: %w", err)
+	}
+
 	idx := indexer.New(repo, db, indexer.Options{
-		Branch:      branch,
-		Output:      cmd.OutOrStdout(),
-		Quiet:       quiet,
-		Incremental: incremental,
+		Branch:          branch,
+		Output:          cmd.OutOrStdout(),
+		Quiet:           quiet,
+		Incremental:     incremental,
+		EcosystemFilter: ecosystemFilter,
 	})
 
 	result, err := idx.Run()

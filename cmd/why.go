@@ -56,8 +56,17 @@ func runWhy(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("getting branch: %w", err)
 	}
+	ecosystemFilter, err := repo.EcosystemFilter()
+	if err != nil {
+		return fmt.Errorf("loading ecosystem config: %w", err)
+	}
 
-	result, err := db.GetWhy(branchInfo.ID, packageName, ecosystem)
+	result, err := db.GetWhy(database.WhyOptions{
+		EcosystemFilterOptions: databaseEcosystemFilterOptions(ecosystemFilter),
+		BranchID:               branchInfo.ID,
+		PackageName:            packageName,
+		Ecosystem:              ecosystem,
+	})
 	if err != nil {
 		return fmt.Errorf("getting why: %w", err)
 	}

@@ -17,6 +17,53 @@ const (
 
 var knownBotAuthorNeedles = []string{"[bot]", "dependabot", "renovate", "greenkeeper"}
 
+// EcosystemFilterOptions narrows query results to ecosystems enabled for a
+// repository. An ignored ecosystem takes precedence over an allowed one.
+type EcosystemFilterOptions struct {
+	AllowedEcosystems []string
+	IgnoredEcosystems []string
+}
+
+func appendEcosystemConfigFilter(query string, args []any, column string, opts EcosystemFilterOptions) (string, []any) {
+	if len(opts.AllowedEcosystems) > 0 {
+		query += " AND (" + column + " IS NULL OR " + column + " = '' OR " + column + " IN (" + placeholders(len(opts.AllowedEcosystems)) + "))"
+		for _, ecosystem := range opts.AllowedEcosystems {
+			args = append(args, ecosystem)
+		}
+	}
+	if len(opts.IgnoredEcosystems) > 0 {
+		query += " AND (" + column + " IS NULL OR " + column + " = '' OR " + column + " NOT IN (" + placeholders(len(opts.IgnoredEcosystems)) + "))"
+		for _, ecosystem := range opts.IgnoredEcosystems {
+			args = append(args, ecosystem)
+		}
+	}
+	return query, args
+}
+
+func placeholders(count int) string {
+	return strings.TrimSuffix(strings.Repeat("?,", count), ",")
+}
+
+func ecosystemAllowed(ecosystem string, opts EcosystemFilterOptions) bool {
+	if ecosystem == "" {
+		return true
+	}
+	for _, ignored := range opts.IgnoredEcosystems {
+		if ecosystem == ignored {
+			return false
+		}
+	}
+	if len(opts.AllowedEcosystems) == 0 {
+		return true
+	}
+	for _, allowed := range opts.AllowedEcosystems {
+		if ecosystem == allowed {
+			return true
+		}
+	}
+	return false
+}
+
 // Change type values
 const (
 	changeAdded    = "added"
@@ -391,6 +438,7 @@ type CommitWithChanges struct {
 }
 
 type LogOptions struct {
+	EcosystemFilterOptions
 	BranchID    int64
 	Ecosystem   string
 	Author      string
@@ -428,6 +476,7 @@ func (db *DB) GetCommitsWithChanges(opts LogOptions) ([]CommitWithChanges, error
 		query += filterEcosystem
 		args = append(args, opts.Ecosystem)
 	}
+	query, args = appendEcosystemConfigFilter(query, args, "dc.ecosystem", opts.EcosystemFilterOptions)
 	if opts.Author != "" {
 		query += " AND (c.author_name LIKE ? OR c.author_email LIKE ?)"
 		pattern := "%" + opts.Author + "%"
@@ -495,14 +544,14 @@ func (db *DB) GetCommitsWithChanges(opts LogOptions) ([]CommitWithChanges, error
 		return nil, err
 	}
 
-	// Assign changes to commits, filtering by ecosystem if needed
+	// Assign changes to commits, applying all ecosystem filters.
 	for i := range commits {
 		changes := allChanges[commits[i].SHA]
 
-		if opts.Ecosystem != "" {
+		if opts.Ecosystem != "" || len(opts.AllowedEcosystems) > 0 || len(opts.IgnoredEcosystems) > 0 {
 			var filtered []Change
 			for _, ch := range changes {
-				if ch.Ecosystem == opts.Ecosystem {
+				if (opts.Ecosystem == "" || ch.Ecosystem == opts.Ecosystem) && ecosystemAllowed(ch.Ecosystem, opts.EcosystemFilterOptions) {
 					filtered = append(filtered, ch)
 				}
 			}
@@ -531,6 +580,7 @@ type HistoryEntry struct {
 }
 
 type HistoryOptions struct {
+	EcosystemFilterOptions
 	BranchID    int64
 	PackageName string
 	Ecosystem   string
@@ -552,6 +602,7 @@ type BlameEntry struct {
 }
 
 type BlameOptions struct {
+	EcosystemFilterOptions
 	BranchID    int64
 	Ecosystem   string
 	ExcludeBots bool
@@ -604,6 +655,7 @@ type AuthorStats struct {
 }
 
 type StatsOptions struct {
+	EcosystemFilterOptions
 	BranchID    int64
 	Ecosystem   string
 	Since       string
@@ -619,6 +671,13 @@ type StaleEntry struct {
 	ManifestPath string `json:"manifest_path"`
 	LastChanged  string `json:"last_changed"`
 	DaysSince    int    `json:"days_since"`
+}
+
+type StaleOptions struct {
+	EcosystemFilterOptions
+	BranchID  int64
+	Ecosystem string
+	Days      int
 }
 
 type EcosystemCount struct {
@@ -700,7 +759,7 @@ func (db *DB) GetDatabaseInfo() (*DatabaseInfo, error) {
 	return info, nil
 }
 
-func (db *DB) GetStaleDependencies(branchID int64, ecosystem string, days int) ([]StaleEntry, error) {
+func (db *DB) GetStaleDependencies(opts StaleOptions) ([]StaleEntry, error) {
 	query := `
 		WITH current_deps AS (
 			SELECT DISTINCT ds.name, ds.ecosystem, ds.requirement, m.path, m.kind
@@ -726,21 +785,29 @@ func (db *DB) GetStaleDependencies(branchID int64, ecosystem string, days int) (
 		FROM current_deps cd
 		LEFT JOIN last_changed lc ON lc.name = cd.name AND lc.path = cd.path
 	`
-	args := []any{branchID, branchID, branchID}
+	args := []any{opts.BranchID, opts.BranchID, opts.BranchID}
 
-	if ecosystem != "" {
+	if opts.Ecosystem != "" {
 		query += " WHERE cd.ecosystem = ?"
-		args = append(args, ecosystem)
+		args = append(args, opts.Ecosystem)
+	}
+	whereStarted := opts.Ecosystem != ""
+	if len(opts.AllowedEcosystems) > 0 || len(opts.IgnoredEcosystems) > 0 {
+		if !whereStarted {
+			query += " WHERE 1=1"
+		}
+		query, args = appendEcosystemConfigFilter(query, args, "cd.ecosystem", opts.EcosystemFilterOptions)
+		whereStarted = true
 	}
 
-	if days > 0 {
-		if ecosystem != "" {
+	if opts.Days > 0 {
+		if whereStarted {
 			query += " AND"
 		} else {
 			query += " WHERE"
 		}
 		query += " CAST(julianday('now') - julianday(substr(COALESCE(lc.last_changed, '2000-01-01'), 1, 19)) AS INTEGER) >= ?"
-		args = append(args, days)
+		args = append(args, opts.Days)
 	}
 
 	query += " ORDER BY days_since DESC, cd.name"
@@ -825,6 +892,7 @@ func (db *DB) GetStats(opts StatsOptions) (*Stats, error) {
 		query += filterEcosystem
 		args = append(args, opts.Ecosystem)
 	}
+	query, args = appendEcosystemConfigFilter(query, args, "dc.ecosystem", opts.EcosystemFilterOptions)
 	if opts.ExcludeBots {
 		query, args = appendExcludeBotsFilter(query, args)
 	}
@@ -855,20 +923,20 @@ func (db *DB) GetStats(opts StatsOptions) (*Stats, error) {
 		`, opts.BranchID).Scan(&snapshotCommitID)
 	}
 	if snapshotCommitID.Valid {
-		err = db.QueryRow(`
-			SELECT COUNT(*) FROM dependency_snapshots WHERE commit_id = ?
-		`, snapshotCommitID.Int64).Scan(&stats.CurrentDeps)
+		query = "SELECT COUNT(*) FROM dependency_snapshots WHERE commit_id = ?"
+		args = []any{snapshotCommitID.Int64}
+		query, args = appendEcosystemConfigFilter(query, args, "ecosystem", opts.EcosystemFilterOptions)
+		err = db.QueryRow(query, args...).Scan(&stats.CurrentDeps)
 		if err != nil {
 			return nil, err
 		}
 
 		// Deps by ecosystem
-		rows, err := db.Query(`
-			SELECT ecosystem, COUNT(*)
-			FROM dependency_snapshots
-			WHERE commit_id = ?
-			GROUP BY ecosystem
-		`, snapshotCommitID.Int64)
+		query = "SELECT ecosystem, COUNT(*) FROM dependency_snapshots WHERE commit_id = ?"
+		args = []any{snapshotCommitID.Int64}
+		query, args = appendEcosystemConfigFilter(query, args, "ecosystem", opts.EcosystemFilterOptions)
+		query += " GROUP BY ecosystem"
+		rows, err := db.Query(query, args...)
 		if err != nil {
 			return nil, err
 		}
@@ -899,6 +967,7 @@ func (db *DB) GetStats(opts StatsOptions) (*Stats, error) {
 		query += filterEcosystem
 		args = append(args, opts.Ecosystem)
 	}
+	query, args = appendEcosystemConfigFilter(query, args, "dc.ecosystem", opts.EcosystemFilterOptions)
 	if opts.ExcludeBots {
 		query, args = appendExcludeBotsFilter(query, args)
 	}
@@ -946,6 +1015,7 @@ func (db *DB) GetStats(opts StatsOptions) (*Stats, error) {
 		query += filterEcosystem
 		args = append(args, opts.Ecosystem)
 	}
+	query, args = appendEcosystemConfigFilter(query, args, "dc.ecosystem", opts.EcosystemFilterOptions)
 	if opts.ExcludeBots {
 		query, args = appendExcludeBotsFilter(query, args)
 	}
@@ -987,6 +1057,7 @@ func (db *DB) GetStats(opts StatsOptions) (*Stats, error) {
 		query += filterEcosystem
 		args = append(args, opts.Ecosystem)
 	}
+	query, args = appendEcosystemConfigFilter(query, args, "dc.ecosystem", opts.EcosystemFilterOptions)
 	if opts.ExcludeBots {
 		query, args = appendExcludeBotsFilter(query, args)
 	}
@@ -1041,6 +1112,7 @@ func (db *DB) GetAuthorStats(opts StatsOptions) ([]AuthorStats, error) {
 		query += filterEcosystem
 		args = append(args, opts.Ecosystem)
 	}
+	query, args = appendEcosystemConfigFilter(query, args, "dc.ecosystem", opts.EcosystemFilterOptions)
 	if opts.ExcludeBots {
 		query, args = appendExcludeBotsFilter(query, args)
 	}
@@ -1177,7 +1249,14 @@ func (db *DB) SearchDependencies(branchID int64, pattern, ecosystem string, dire
 	return results, rows.Err()
 }
 
-func (db *DB) GetWhy(branchID int64, packageName, ecosystem string) (*WhyResult, error) {
+type WhyOptions struct {
+	EcosystemFilterOptions
+	BranchID    int64
+	PackageName string
+	Ecosystem   string
+}
+
+func (db *DB) GetWhy(opts WhyOptions) (*WhyResult, error) {
 	query := `
 		SELECT dc.name, dc.ecosystem, m.path, c.sha, c.message, c.author_name, c.author_email, c.committed_at
 		FROM dependency_changes dc
@@ -1186,12 +1265,13 @@ func (db *DB) GetWhy(branchID int64, packageName, ecosystem string) (*WhyResult,
 		JOIN manifests m ON m.id = dc.manifest_id
 		WHERE bc.branch_id = ? AND dc.change_type = 'added' AND dc.name = ?
 	`
-	args := []any{branchID, packageName}
+	args := []any{opts.BranchID, opts.PackageName}
 
-	if ecosystem != "" {
+	if opts.Ecosystem != "" {
 		query += filterEcosystem
-		args = append(args, ecosystem)
+		args = append(args, opts.Ecosystem)
 	}
+	query, args = appendEcosystemConfigFilter(query, args, "dc.ecosystem", opts.EcosystemFilterOptions)
 
 	query += " ORDER BY bc.position ASC LIMIT 1"
 
@@ -1267,6 +1347,7 @@ func (db *DB) GetBlame(opts BlameOptions) ([]BlameEntry, error) {
 		query += " AND cd.ecosystem = ?"
 		args = append(args, opts.Ecosystem)
 	}
+	query, args = appendEcosystemConfigFilter(query, args, "cd.ecosystem", opts.EcosystemFilterOptions)
 	if opts.ExcludeBots {
 		query, args = appendExcludeBotsFilter(query, args)
 	}
@@ -1328,6 +1409,7 @@ func (db *DB) GetPackageHistory(opts HistoryOptions) ([]HistoryEntry, error) {
 		query += filterEcosystem
 		args = append(args, opts.Ecosystem)
 	}
+	query, args = appendEcosystemConfigFilter(query, args, "dc.ecosystem", opts.EcosystemFilterOptions)
 	if opts.Author != "" {
 		query += " AND (c.author_name LIKE ? OR c.author_email LIKE ?)"
 		pattern := "%" + opts.Author + "%"
@@ -2762,6 +2844,7 @@ type BisectCandidate struct {
 
 // BisectOptions specifies filters for finding bisect candidates.
 type BisectOptions struct {
+	EcosystemFilterOptions
 	BranchID     int64
 	StartSHA     string // good commit (older)
 	EndSHA       string // bad commit (newer)
@@ -2812,6 +2895,7 @@ func (db *DB) GetBisectCandidates(opts BisectOptions) ([]BisectCandidate, error)
 		query += filterEcosystem
 		args = append(args, opts.Ecosystem)
 	}
+	query, args = appendEcosystemConfigFilter(query, args, "dc.ecosystem", opts.EcosystemFilterOptions)
 	if opts.PackageName != "" {
 		query += " AND dc.name = ?"
 		args = append(args, opts.PackageName)

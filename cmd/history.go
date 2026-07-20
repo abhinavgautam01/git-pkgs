@@ -71,15 +71,20 @@ func runHistory(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("getting branch: %w", err)
 	}
+	ecosystemFilter, err := repo.EcosystemFilter()
+	if err != nil {
+		return fmt.Errorf("loading ecosystem config: %w", err)
+	}
 
 	entries, err := db.GetPackageHistory(database.HistoryOptions{
-		BranchID:    branchInfo.ID,
-		PackageName: packageName,
-		Ecosystem:   ecosystem,
-		Author:      author,
-		Since:       since,
-		Until:       until,
-		ExcludeBots: excludeBots,
+		EcosystemFilterOptions: databaseEcosystemFilterOptions(ecosystemFilter),
+		BranchID:               branchInfo.ID,
+		PackageName:            packageName,
+		Ecosystem:              ecosystem,
+		Author:                 author,
+		Since:                  since,
+		Until:                  until,
+		ExcludeBots:            excludeBots,
 	})
 	if err != nil {
 		return fmt.Errorf("getting history: %w", err)

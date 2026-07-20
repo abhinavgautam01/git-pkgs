@@ -252,6 +252,47 @@ func TestInfoCommand(t *testing.T) {
 		}
 	})
 
+	t.Run("ecosystems flag respects configured filter on existing database", func(t *testing.T) {
+		repoDir := createTestRepo(t)
+		addFileAndCommit(t, repoDir, "package.json", packageJSON, "Add package.json")
+		addFileAndCommit(t, repoDir, "Gemfile", "source \"https://rubygems.org\"\ngem \"rails\", \"~> 7.0\"\n", "Add Gemfile")
+
+		cleanup := chdir(t, repoDir)
+		defer cleanup()
+
+		_, _, err := runCmd(t, "init")
+		if err != nil {
+			t.Fatalf("init failed: %v", err)
+		}
+
+		setGitConfig(t, repoDir, "pkgs.ignoredEcosystems", "npm")
+
+		stdout, _, err := runCmd(t, "info", "--ecosystems")
+		if err != nil {
+			t.Fatalf("info --ecosystems failed: %v", err)
+		}
+		if strings.Contains(stdout, "npm") {
+			t.Fatalf("expected ignored npm ecosystem to be hidden, got: %s", stdout)
+		}
+		if !strings.Contains(stdout, "gem") && !strings.Contains(stdout, "rubygems") {
+			t.Fatalf("expected RubyGems ecosystem to remain visible, got: %s", stdout)
+		}
+
+		stdout, _, err = runCmd(t, "info", "--ecosystems", "-f", "json")
+		if err != nil {
+			t.Fatalf("info --ecosystems json failed: %v", err)
+		}
+		var ecosystems []map[string]interface{}
+		if err := json.Unmarshal([]byte(stdout), &ecosystems); err != nil {
+			t.Fatalf("failed to parse JSON: %v", err)
+		}
+		for _, ecosystem := range ecosystems {
+			if ecosystem["name"] == "npm" {
+				t.Fatalf("expected ignored npm ecosystem to be hidden from JSON, got: %#v", ecosystems)
+			}
+		}
+	})
+
 	t.Run("outputs json format", func(t *testing.T) {
 		repoDir := createTestRepo(t)
 		addFileAndCommit(t, repoDir, "package.json", packageJSON, "Add package.json")
