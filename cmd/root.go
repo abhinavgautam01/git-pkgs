@@ -82,6 +82,7 @@ func NewRootCmd() *cobra.Command {
 	addFundingCmd(cmd)
 	addMaintainersCmd(cmd)
 	addHealthCmd(cmd)
+	addProvenanceCmd(cmd)
 	addChangelogCmd(cmd)
 	addLicensesCmd(cmd)
 	addIntegrityCmd(cmd)

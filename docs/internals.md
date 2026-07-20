@@ -2,7 +2,7 @@
 
 git-pkgs walks a repository's commit history, parses manifest files at each commit, and stores dependency changes in a SQLite database. This lets you query what changed, when, and who did it.
 
-The tool works with two types of data. Intrinsic data comes from your git history: dependency names, versions from manifests, who added them, when, and why. Commands like `list`, `history`, `blame`, `diff`, and `stale` use only intrinsic data and require no network access. Extrinsic data comes from external sources: vulnerability info from [OSV](https://osv.dev), and registry metadata (latest versions, licenses, funding links, maintainer data, deprecation status, maintenance health signals) from [ecosyste.ms](https://packages.ecosyste.ms/) and package registries. Commands like `vulns`, `outdated`, `freshness`, `licenses`, `deprecated`, `funding`, `maintainers`, and `health` fetch and cache this external data.
+The tool works with two types of data. Intrinsic data comes from your git history: dependency names, versions from manifests, who added them, when, and why. Commands like `list`, `history`, `blame`, `diff`, and `stale` use only intrinsic data and require no network access. Extrinsic data comes from external sources: vulnerability info from [OSV](https://osv.dev), and registry metadata (latest versions, licenses, funding links, maintainer data, deprecation status, maintenance health signals, provenance attestations) from [ecosyste.ms](https://packages.ecosyste.ms/) and package registries. Commands like `vulns`, `outdated`, `freshness`, `licenses`, `deprecated`, `funding`, `maintainers`, `health`, and `provenance` fetch external data; most enrichment-backed commands cache it.
 
 ## Package Structure
 
@@ -152,7 +152,7 @@ See [vulns.md](vulns.md) for command documentation.
 
 ## Package Enrichment
 
-The `outdated`, `freshness`, `deprecated`, `funding`, `maintainers`, `health`, `changelog`, `licenses`, `sbom`, and `integrity --registry` commands fetch metadata from external sources. The [`github.com/git-pkgs/enrichment`](https://github.com/git-pkgs/enrichment) library provides a unified interface with two backends:
+The `outdated`, `freshness`, `deprecated`, `funding`, `maintainers`, `health`, `changelog`, `licenses`, `sbom`, `provenance`, and `integrity --registry` commands fetch metadata from external sources. The [`github.com/git-pkgs/enrichment`](https://github.com/git-pkgs/enrichment) library provides a unified interface with two backends:
 
 - **ecosyste.ms** - Bulk API queries via [ecosyste-ms/ecosystems-go](https://github.com/ecosyste-ms/ecosystems-go). Efficient for public packages.
 - **registries** - Direct queries to package registries via [git-pkgs/registries](https://github.com/git-pkgs/registries). Required for private registries.
@@ -162,6 +162,8 @@ By default, a hybrid approach routes requests based on PURL qualifiers: packages
 Data is cached in the `packages` and `versions` tables with a 24-hour TTL. The `version_lists` table records when a complete package version history was fetched. The `packages` table stores provenance: `repository_url` (the registry queried) and `source` (ecosystems or registries). The `funding` command stores package funding links in `packages`, the `maintainers` command stores package maintainer lists in `packages`, the `health` command stores package maintenance health signals in `packages`, and the `deprecated` command uses the `versions` cache and fetches exact-version status from registries when cached deprecation metadata is missing.
 
 The `licenses --drift` check reads per-version license data from the `versions` cache and falls back to enrichment version lookups for uncached installed versions. `licenses --offline` disables enrichment requests and permits cached package and version metadata past the normal TTL. It returns an error when required metadata is absent from the cache. `integrity --registry` stores exact-version hashes with their own freshness timestamp. `freshness` and dated `outdated` checks reuse version metadata only when a separately tracked complete version-list fetch is fresh.
+
+The `provenance` command checks exact installed versions directly against registry APIs for attestation or signature metadata and reports unsupported ecosystems explicitly. It does not currently cache provenance responses because registry support is still uneven and the command is intended for occasional review.
 
 ## Package Management
 
