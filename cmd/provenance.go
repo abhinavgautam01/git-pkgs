@@ -279,7 +279,7 @@ func buildProvenanceResult(
 			result.Summary.LookupErrors++
 		}
 
-		if showMissing && data.Status == provenanceStatusTrustedPublishing {
+		if showMissing && (data.Status == provenanceStatusTrustedPublishing || data.Status == provenanceStatusAttested) {
 			continue
 		}
 

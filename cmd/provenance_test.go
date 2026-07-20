@@ -111,8 +111,8 @@ func TestBuildProvenanceResultMissingFilter(t *testing.T) {
 	if result.Summary.UnresolvedDependencies != 1 {
 		t.Fatalf("unresolved dependencies = %d, want 1", result.Summary.UnresolvedDependencies)
 	}
-	if len(result.Dependencies) != 3 {
-		t.Fatalf("dependencies length = %d, want 3", len(result.Dependencies))
+	if len(result.Dependencies) != 2 {
+		t.Fatalf("dependencies length = %d, want 2", len(result.Dependencies))
 	}
 	for _, dep := range result.Dependencies {
 		if dep.TrustedPublishing {
@@ -121,8 +121,8 @@ func TestBuildProvenanceResultMissingFilter(t *testing.T) {
 		if dep.Status == string(provenanceStatusUnsupported) && dep.Error != "" {
 			t.Fatalf("unsupported dependency should not be reported as error: %#v", dep)
 		}
-		if dep.Name == "attested" && dep.Status != string(provenanceStatusAttested) {
-			t.Fatalf("attested dependency = %#v, want attested status", dep)
+		if dep.Name == "attested" {
+			t.Fatalf("attested dependency should be filtered from --missing result: %#v", dep)
 		}
 	}
 }
