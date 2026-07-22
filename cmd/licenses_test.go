@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -25,6 +26,7 @@ type mockEnrichmentClient struct {
 	getVersionsCalls int
 	getVersionCalls  int
 	bulkLookupCalls  int
+	getVersionErr    error
 }
 
 func (m *mockEnrichmentClient) BulkLookup(_ context.Context, purls []string) (map[string]*enrichment.PackageInfo, error) {
@@ -54,6 +56,9 @@ func (m *mockEnrichmentClient) GetVersion(_ context.Context, purl string) (*enri
 	defer m.mu.Unlock()
 
 	m.getVersionCalls++
+	if m.getVersionErr != nil {
+		return nil, m.getVersionErr
+	}
 	if info, ok := m.versionInfos[purl]; ok {
 		return info, nil
 	}
@@ -91,6 +96,30 @@ func setMockEnrichmentClient(mock *mockEnrichmentClient) (*mockEnrichmentClient,
 const gemfileWithLGPL = `source 'https://rubygems.org'
 gem 'sidekiq'
 gem 'rails'
+`
+
+const uaParserPackageJSON = `{
+  "dependencies": {
+    "ua-parser-js": "^1.0.41"
+  }
+}
+`
+
+const uaParserPackageLockJSON = `{
+  "name": "license-test",
+  "version": "1.0.0",
+  "lockfileVersion": 3,
+  "packages": {
+    "": {
+      "dependencies": {
+        "ua-parser-js": "^1.0.41"
+      }
+    },
+    "node_modules/ua-parser-js": {
+      "version": "1.0.41"
+    }
+  }
+}
 `
 
 func TestLicensesCommand(t *testing.T) {
@@ -173,6 +202,86 @@ func TestLicensesCommand(t *testing.T) {
 			t.Error("expected command to return error when denied license found")
 		}
 	})
+
+	for _, tt := range []struct {
+		name           string
+		versionLicense string
+		wantLicense    string
+		wantViolation  bool
+		wantWarning    bool
+	}{
+		{
+			name:           "license policies use installed version metadata",
+			versionLicense: "MIT",
+			wantLicense:    "MIT",
+		},
+		{
+			name:          "license policies fall back to package metadata",
+			wantLicense:   "AGPL-3.0-or-later",
+			wantViolation: true,
+		},
+		{
+			name:          "license policies warn when version lookup fails",
+			wantLicense:   "AGPL-3.0-or-later",
+			wantViolation: true,
+			wantWarning:   true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mock, restore := setMockEnrichmentWithVersionInfos(
+				map[string]*enrichment.PackageInfo{
+					"pkg:npm/ua-parser-js": {
+						Ecosystem:     "npm",
+						Name:          "ua-parser-js",
+						LatestVersion: "2.0.10",
+						License:       "AGPL-3.0-or-later",
+					},
+				},
+				map[string]*enrichment.VersionInfo{
+					"pkg:npm/ua-parser-js@1.0.41": {Number: "1.0.41", License: tt.versionLicense},
+				},
+			)
+			defer restore()
+			if tt.wantWarning {
+				mock.getVersionErr = errors.New("enrichment unavailable")
+			}
+
+			initRepoWithFiles(t, map[string]string{
+				"package.json":      uaParserPackageJSON,
+				"package-lock.json": uaParserPackageLockJSON,
+			})
+
+			stdout, stderr, err := runCmd(t, "licenses", "--deny", "AGPL-3.0-or-later", "--format", "json")
+			if (err != nil) != tt.wantViolation {
+				t.Fatalf("licenses error = %v, want violation %v", err, tt.wantViolation)
+			}
+			gotWarning := strings.Contains(stderr, "Warning: version license lookup failed")
+			if gotWarning != tt.wantWarning {
+				t.Fatalf("version lookup warning = %v, want %v; stderr: %s", gotWarning, tt.wantWarning, stderr)
+			}
+
+			var result []cmd.LicenseInfo
+			if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+				t.Fatalf("parse licenses output: %v\nOutput: %s", err, stdout)
+			}
+			if len(result) != 1 {
+				t.Fatalf("license entries = %d, want 1", len(result))
+			}
+			if len(result[0].Licenses) != 1 || result[0].Licenses[0] != tt.wantLicense {
+				t.Fatalf("licenses = %v, want [%s]", result[0].Licenses, tt.wantLicense)
+			}
+			if result[0].Flagged != tt.wantViolation {
+				t.Fatalf("flagged = %v, want %v", result[0].Flagged, tt.wantViolation)
+			}
+
+			mock.mu.Lock()
+			getVersionCalls := mock.getVersionCalls
+			mock.mu.Unlock()
+			if getVersionCalls != 1 {
+				t.Fatalf("GetVersion calls = %d, want 1", getVersionCalls)
+			}
+		})
+	}
 
 	t.Run("copyleft flag detects copyleft licenses", func(t *testing.T) {
 		restore := setMockEnrichment(map[string]*enrichment.PackageInfo{
