@@ -83,6 +83,7 @@ func (db *DB) CreateSchema() error {
 		requirement TEXT,
 		dependency_type TEXT,
 		integrity TEXT,
+		direct INTEGER NOT NULL DEFAULT 0,
 		created_at DATETIME,
 		updated_at DATETIME
 	);

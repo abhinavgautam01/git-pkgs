@@ -45,16 +45,22 @@ Licenses are normalized to SPDX identifiers when possible.`,
 }
 
 type LicenseInfo struct {
-	Name         string   `json:"name"`
-	Ecosystem    string   `json:"ecosystem"`
-	Version      string   `json:"version,omitempty"`
-	Licenses     []string `json:"licenses"`
-	LicenseText  string   `json:"license_text,omitempty"`
-	ManifestPath string   `json:"manifest_path"`
-	PURL         string   `json:"purl,omitempty"`
-	Flagged      bool     `json:"flagged,omitempty"`
-	FlagReason   string   `json:"flag_reason,omitempty"`
+	Name          string   `json:"name"`
+	Ecosystem     string   `json:"ecosystem"`
+	Version       string   `json:"version,omitempty"`
+	Licenses      []string `json:"licenses"`
+	LicenseText   string   `json:"license_text,omitempty"`
+	ManifestPath  string   `json:"manifest_path"`
+	PURL          string   `json:"purl,omitempty"`
+	LicenseSource string   `json:"license_source,omitempty"`
+	Flagged       bool     `json:"flagged,omitempty"`
+	FlagReason    string   `json:"flag_reason,omitempty"`
 }
+
+const (
+	licenseSourcePackage = "package"
+	licenseSourceVersion = "version"
+)
 
 type LicenseDriftSummary struct {
 	TotalDependencies      int `json:"total_dependencies"`
@@ -156,7 +162,7 @@ func runLicenses(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("looking up packages: %w", err)
 	}
-	resolvedVersionPURLs, resolvedDeps := resolvedLicenseVersions(purlToDep, deps)
+	resolvedVersionPURLs, resolvedDeps, ambiguousVersions := resolvedLicenseVersions(purlToDep, deps)
 	// Version metadata is optional; package metadata remains the fallback.
 	versionLicenses, versionLicenseErr := loadLicenseVersionLicenses(db, resolvedDeps, offline)
 	if versionLicenseErr != nil {
@@ -186,10 +192,11 @@ func runLicenses(cmd *cobra.Command, args []string) error {
 
 	// Build license info
 	var licenseInfos []LicenseInfo
+	var ambiguousFallbacks []string
 	hasViolations := false
 
-	for purl, data := range packageData {
-		dep := purlToDep[purl]
+	for lookupPURL, data := range packageData {
+		dep := purlToDep[lookupPURL]
 
 		// Use API data when dep lookup failed (PURL mismatch)
 		name := dep.Name
@@ -204,12 +211,23 @@ func runLicenses(cmd *cobra.Command, args []string) error {
 			Ecosystem:    ecosystem,
 			Version:      dep.Requirement,
 			ManifestPath: dep.ManifestPath,
-			PURL:         purl,
+			PURL:         lookupPURL,
 		}
 
 		license := data.License
-		if versionLicense := versionLicenses[resolvedVersionPURLs[purl]]; versionLicense != "" {
+		versionedPURL := resolvedVersionPURLs[lookupPURL]
+		if versionLicense := versionLicenses[versionedPURL]; versionLicense != "" {
 			license = versionLicense
+			info.LicenseSource = licenseSourceVersion
+			info.PURL = versionedPURL
+			if parsed, parseErr := purl.Parse(versionedPURL); parseErr == nil {
+				info.Version = parsed.Version
+			}
+		} else if license != "" {
+			info.LicenseSource = licenseSourcePackage
+			if ambiguousVersions[lookupPURL] {
+				ambiguousFallbacks = append(ambiguousFallbacks, lookupPURL)
+			}
 		}
 		if license != "" {
 			info.Licenses = []string{license}
@@ -276,6 +294,13 @@ func runLicenses(cmd *cobra.Command, args []string) error {
 		}
 
 		licenseInfos = append(licenseInfos, info)
+	}
+	if len(ambiguousFallbacks) > 0 {
+		sort.Strings(ambiguousFallbacks)
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(),
+			"Warning: could not determine installed versions for %d dependencies; using package-level license metadata: %s\n",
+			len(ambiguousFallbacks), strings.Join(ambiguousFallbacks, ", "),
+		)
 	}
 
 	// Sort by name
@@ -434,9 +459,9 @@ func getLicenseData(
 func resolvedLicenseVersions(
 	purlToDep map[string]database.Dependency,
 	deps []database.Dependency,
-) (map[string]string, []database.Dependency) {
-	// Manifest requirements are usually ranges, so only pair them with a
-	// lockfile when that package resolves to one version in the same directory.
+) (map[string]string, []database.Dependency, map[string]bool) {
+	// Manifest requirements are usually ranges. Prefer the lockfile's direct
+	// installation when it distinguishes that from other resolved versions.
 	candidatesByLocation := make(map[string]map[string]database.Dependency)
 	for _, dep := range deps {
 		if !isResolvedDependency(dep) {
@@ -450,11 +475,15 @@ func resolvedLicenseVersions(
 		if candidatesByLocation[location] == nil {
 			candidatesByLocation[location] = make(map[string]database.Dependency)
 		}
-		candidatesByLocation[location][versionedPURL] = dep
+		existing, ok := candidatesByLocation[location][versionedPURL]
+		if !ok || (dep.Direct && !existing.Direct) {
+			candidatesByLocation[location][versionedPURL] = dep
+		}
 	}
 
 	resolvedVersionPURLs := make(map[string]string)
 	resolvedByPURL := make(map[string]database.Dependency)
+	ambiguousVersions := make(map[string]bool)
 	for lookupPURL, directDep := range purlToDep {
 		if isResolvedDependency(directDep) {
 			versionedPURL := versionedPURLForDependency(directDep)
@@ -466,13 +495,15 @@ func resolvedLicenseVersions(
 		}
 
 		candidates := candidatesByLocation[licenseDependencyLocation(directDep)]
-		if len(candidates) != 1 {
+		versionedPURL, dep, ambiguous := resolvedLicenseCandidate(candidates)
+		if ambiguous {
+			ambiguousVersions[lookupPURL] = true
+		}
+		if versionedPURL == "" {
 			continue
 		}
-		for versionedPURL, dep := range candidates {
-			resolvedVersionPURLs[lookupPURL] = versionedPURL
-			resolvedByPURL[versionedPURL] = dep
-		}
+		resolvedVersionPURLs[lookupPURL] = versionedPURL
+		resolvedByPURL[versionedPURL] = dep
 	}
 
 	versionedPURLs := make([]string, 0, len(resolvedByPURL))
@@ -485,7 +516,31 @@ func resolvedLicenseVersions(
 	for _, versionedPURL := range versionedPURLs {
 		resolvedDeps = append(resolvedDeps, resolvedByPURL[versionedPURL])
 	}
-	return resolvedVersionPURLs, resolvedDeps
+	return resolvedVersionPURLs, resolvedDeps, ambiguousVersions
+}
+
+func resolvedLicenseCandidate(candidates map[string]database.Dependency) (string, database.Dependency, bool) {
+	if len(candidates) == 1 {
+		for versionedPURL, dep := range candidates {
+			return versionedPURL, dep, false
+		}
+	}
+
+	var directPURL string
+	var directDep database.Dependency
+	directCount := 0
+	for versionedPURL, dep := range candidates {
+		if !dep.Direct {
+			continue
+		}
+		directPURL = versionedPURL
+		directDep = dep
+		directCount++
+	}
+	if directCount == 1 {
+		return directPURL, directDep, false
+	}
+	return "", database.Dependency{}, len(candidates) > 1
 }
 
 func licenseDependencyLocation(dep database.Dependency) string {

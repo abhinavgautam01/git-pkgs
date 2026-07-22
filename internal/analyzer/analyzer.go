@@ -36,6 +36,7 @@ type Change struct {
 	DependencyType         string
 	PreviousDependencyType string
 	Integrity              string
+	Direct                 bool
 }
 
 type SnapshotEntry struct {
@@ -45,6 +46,7 @@ type SnapshotEntry struct {
 	Requirement    string
 	DependencyType string
 	Integrity      string
+	Direct         bool
 }
 
 type SnapshotKey struct {
@@ -331,6 +333,7 @@ func (a *Analyzer) AnalyzeCommit(commit *object.Commit, previousSnapshot Snapsho
 				Requirement:    dep.Version,
 				DependencyType: string(dep.Scope),
 				Integrity:      integrity,
+				Direct:         dep.Direct,
 			}
 			result.Changes = append(result.Changes, change)
 
@@ -342,6 +345,7 @@ func (a *Analyzer) AnalyzeCommit(commit *object.Commit, previousSnapshot Snapsho
 				Requirement:    dep.Version,
 				DependencyType: string(dep.Scope),
 				Integrity:      integrity,
+				Direct:         dep.Direct,
 			}
 		}
 	}
@@ -431,6 +435,7 @@ func (a *Analyzer) AnalyzeCommit(commit *object.Commit, previousSnapshot Snapsho
 							DependencyType:         string(dep.Scope),
 							PreviousDependencyType: string(before.Scope),
 							Integrity:              integrity,
+							Direct:                 dep.Direct,
 						})
 						break
 					}
@@ -456,6 +461,7 @@ func (a *Analyzer) AnalyzeCommit(commit *object.Commit, previousSnapshot Snapsho
 						Requirement:    dep.Version,
 						DependencyType: string(dep.Scope),
 						Integrity:      integrity,
+						Direct:         dep.Direct,
 					})
 				} else {
 					result.Changes = append(result.Changes, Change{
@@ -469,6 +475,7 @@ func (a *Analyzer) AnalyzeCommit(commit *object.Commit, previousSnapshot Snapsho
 						PreviousRequirement: previousVersion,
 						DependencyType:      string(dep.Scope),
 						Integrity:           integrity,
+						Direct:              dep.Direct,
 					})
 				}
 			} else {
@@ -483,6 +490,7 @@ func (a *Analyzer) AnalyzeCommit(commit *object.Commit, previousSnapshot Snapsho
 					Requirement:    dep.Version,
 					DependencyType: string(dep.Scope),
 					Integrity:      integrity,
+					Direct:         dep.Direct,
 				})
 			}
 
@@ -493,6 +501,7 @@ func (a *Analyzer) AnalyzeCommit(commit *object.Commit, previousSnapshot Snapsho
 				Requirement:    dep.Version,
 				DependencyType: string(dep.Scope),
 				Integrity:      integrity,
+				Direct:         dep.Direct,
 			}
 		}
 
@@ -520,6 +529,7 @@ func (a *Analyzer) AnalyzeCommit(commit *object.Commit, previousSnapshot Snapsho
 							Requirement:    dep.Version,
 							DependencyType: string(dep.Scope),
 							Integrity:      dep.Integrity,
+							Direct:         dep.Direct,
 						})
 					}
 					key := SnapshotKey{ManifestPath: path, Name: dep.Name, Requirement: dep.Version}
@@ -555,6 +565,7 @@ func (a *Analyzer) AnalyzeCommit(commit *object.Commit, previousSnapshot Snapsho
 				Requirement:    dep.Version,
 				DependencyType: string(dep.Scope),
 				Integrity:      dep.Integrity,
+				Direct:         dep.Direct,
 			})
 
 			key := SnapshotKey{ManifestPath: path, Name: dep.Name, Requirement: dep.Version}
@@ -634,6 +645,7 @@ func (a *Analyzer) DependenciesAtCommit(commit *object.Commit) ([]Change, error)
 				Requirement:    dep.Version,
 				DependencyType: string(dep.Scope),
 				Integrity:      integrity,
+				Direct:         dep.Direct,
 			})
 		}
 
@@ -825,6 +837,7 @@ func (a *Analyzer) DependenciesInWorkingDir(root string, includeSubmodules bool)
 				Requirement:    dep.Version,
 				DependencyType: string(dep.Scope),
 				Integrity:      integrity,
+				Direct:         dep.Direct,
 			})
 		}
 
