@@ -142,6 +142,9 @@ func sbomPURLForDependency(dep database.Dependency) string {
 	if dep.PURL != "" {
 		return dep.PURL
 	}
+	if dep.Ecosystem == "" || dep.Name == "" {
+		return ""
+	}
 	return purl.MakePURLString(dep.Ecosystem, dep.Name, "")
 }
 
@@ -159,14 +162,22 @@ func selectSBOMDependencies(deps []database.Dependency) []database.Dependency {
 		if !isResolvedDependency(dep) && resolvedLocations[sbomDependencyLocation(dep)] {
 			continue
 		}
-		key := sbomPURLForDependency(dep)
-		if key == "" || seen[key] {
+		key := sbomDependencyKey(dep)
+		if seen[key] {
 			continue
 		}
 		seen[key] = true
 		selected = append(selected, dep)
 	}
 	return selected
+}
+
+func sbomDependencyKey(dep database.Dependency) string {
+	if purlStr := sbomPURLForDependency(dep); purlStr != "" {
+		return "purl\x00" + purlStr
+	}
+	return "dependency\x00" + strings.ToLower(dep.Ecosystem) + "\x00" +
+		strings.ToLower(dep.Name) + "\x00" + dep.Requirement
 }
 
 func sbomDependencyLocation(dep database.Dependency) string {

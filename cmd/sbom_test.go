@@ -121,6 +121,22 @@ func TestSelectSBOMDependenciesPrefersResolvedVersions(t *testing.T) {
 	}
 }
 
+func TestSelectSBOMDependenciesKeepsDependenciesWithoutPURL(t *testing.T) {
+	dep := database.Dependency{Name: "local-tool", Requirement: "1.0.0"}
+	otherVersion := dep
+	otherVersion.Requirement = "2.0.0"
+
+	selected := selectSBOMDependencies([]database.Dependency{dep, dep, otherVersion})
+	if len(selected) != 2 {
+		t.Fatalf("selected dependencies = %d, want 2", len(selected))
+	}
+	for _, selectedDep := range selected {
+		if got := sbomPURLForDependency(selectedDep); got != "" {
+			t.Fatalf("PURL = %q, want empty", got)
+		}
+	}
+}
+
 func TestEnrichLicensesUsesVersionMetadata(t *testing.T) {
 	for _, tt := range []struct {
 		name           string
