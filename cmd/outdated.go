@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/git-pkgs/git-pkgs/internal/database"
@@ -129,7 +128,7 @@ func runOutdated(cmd *cobra.Command, args []string) error {
 
 		// If --at is specified, find the latest version at that date
 		if !atTime.IsZero() {
-			latest = findLatestAtDateCached(db, data.Ecosystem, data.Name, purl, atTime)
+			latest = findLatestAtDateCached(db, purl, atTime)
 			if latest == "" {
 				continue
 			}
@@ -270,25 +269,12 @@ func getPackageData(db *database.DB, purls []string, purlToDep map[string]databa
 	return result, nil
 }
 
-func findLatestAtDateCached(db *database.DB, ecosystem, name, purl string, atTime time.Time) string {
+func findLatestAtDateCached(db *database.DB, purl string, atTime time.Time) string {
 	// Check cache first if DB available
 	if db != nil {
 		versions, err := db.GetCachedVersionList(purl, enrichmentCacheTTL)
-		if err == nil && len(versions) > 0 {
-			var latestVersion string
-			var latestTime time.Time
-			for _, v := range versions {
-				if !v.PublishedAt.After(atTime) {
-					if latestVersion == "" || v.PublishedAt.After(latestTime) {
-						// Extract version from PURL (pkg:type/name@version)
-						if idx := strings.LastIndex(v.PURL, "@"); idx > 0 {
-							latestVersion = v.PURL[idx+1:]
-							latestTime = v.PublishedAt
-						}
-					}
-				}
-			}
-			if latestVersion != "" {
+		if err == nil && hasCachedVersionStatuses(versions) {
+			if latestVersion := latestAvailableVersionAt(versions, atTime); latestVersion != "" {
 				return latestVersion
 			}
 		}
@@ -309,25 +295,21 @@ func findLatestAtDateCached(db *database.DB, ecosystem, name, purl string, atTim
 		return ""
 	}
 
-	var latestVersion string
-	var latestTime time.Time
 	var toCache []database.CachedVersion
+	checkedAt := time.Now()
 
 	for _, v := range apiVersions {
 		// Build version PURL
 		versionPurl := purl + "@" + v.Number
-		toCache = append(toCache, database.CachedVersion{
-			PURL:        versionPurl,
-			PackagePURL: purl,
-			PublishedAt: v.PublishedAt,
-		})
-
-		if !v.PublishedAt.IsZero() && !v.PublishedAt.After(atTime) {
-			if latestVersion == "" || v.PublishedAt.After(latestTime) {
-				latestVersion = v.Number
-				latestTime = v.PublishedAt
-			}
+		cachedVersion := database.CachedVersion{
+			PURL:            versionPurl,
+			PackagePURL:     purl,
+			PublishedAt:     v.PublishedAt,
+			Status:          enrichmentVersionStatus(v),
+			StatusCheckedAt: checkedAt,
+			Metadata:        v.Metadata,
 		}
+		toCache = append(toCache, cachedVersion)
 	}
 
 	// Save to cache if DB available
@@ -335,6 +317,21 @@ func findLatestAtDateCached(db *database.DB, ecosystem, name, purl string, atTim
 		_ = db.SaveVersionList(purl, toCache)
 	}
 
+	return latestAvailableVersionAt(toCache, atTime)
+}
+
+func latestAvailableVersionAt(versions []database.CachedVersion, atTime time.Time) string {
+	var latestVersion string
+	var latestTime time.Time
+	for _, version := range versions {
+		if version.PublishedAt.IsZero() || version.PublishedAt.After(atTime) || isWithdrawnVersionStatus(version.Status) {
+			continue
+		}
+		if latestVersion == "" || version.PublishedAt.After(latestTime) {
+			latestVersion = versionFromPURL(version.PURL)
+			latestTime = version.PublishedAt
+		}
+	}
 	return latestVersion
 }
 
