@@ -238,7 +238,7 @@ func (db *DB) GetLastSnapshot(branchID int64) (map[string]SnapshotInfo, error) {
 	}
 
 	rows, err := db.Query(`
-		SELECT m.path, ds.name, ds.ecosystem, ds.purl, ds.requirement, ds.dependency_type, ds.integrity
+		SELECT m.path, ds.name, ds.ecosystem, ds.purl, ds.requirement, ds.dependency_type, ds.integrity, ds.direct
 		FROM dependency_snapshots ds
 		JOIN manifests m ON m.id = ds.manifest_id
 		WHERE ds.commit_id = ?
@@ -254,7 +254,7 @@ func (db *DB) GetLastSnapshot(branchID int64) (map[string]SnapshotInfo, error) {
 		var info SnapshotInfo
 		var ecosystem, purl, requirement, depType, integrity sql.NullString
 
-		if err := rows.Scan(&path, &name, &ecosystem, &purl, &requirement, &depType, &integrity); err != nil {
+		if err := rows.Scan(&path, &name, &ecosystem, &purl, &requirement, &depType, &integrity, &info.Direct); err != nil {
 			return nil, err
 		}
 
@@ -307,6 +307,7 @@ type Dependency struct {
 	Integrity      string `json:"integrity,omitempty"`
 	ManifestPath   string `json:"manifest_path"`
 	ManifestKind   string `json:"manifest_kind"`
+	Direct         bool   `json:"-"`
 }
 
 func (db *DB) GetDependenciesAtRef(ref string, branchID int64) ([]Dependency, error) {
@@ -371,7 +372,7 @@ func (db *DB) GetLatestDependencies(branchID int64) ([]Dependency, error) {
 
 func (db *DB) getDependenciesForCommitID(commitID int64) ([]Dependency, error) {
 	rows, err := db.Query(`
-		SELECT ds.name, ds.ecosystem, ds.purl, ds.requirement, ds.dependency_type, ds.integrity, m.path, m.kind
+		SELECT ds.name, ds.ecosystem, ds.purl, ds.requirement, ds.dependency_type, ds.integrity, ds.direct, m.path, m.kind
 		FROM dependency_snapshots ds
 		JOIN manifests m ON m.id = ds.manifest_id
 		WHERE ds.commit_id = ? AND ds.name != '_EMPTY_MARKER_'
@@ -387,7 +388,7 @@ func (db *DB) getDependenciesForCommitID(commitID int64) ([]Dependency, error) {
 		var d Dependency
 		var ecosystem, purl, requirement, depType, integrity, kind sql.NullString
 
-		if err := rows.Scan(&d.Name, &ecosystem, &purl, &requirement, &depType, &integrity, &d.ManifestPath, &kind); err != nil {
+		if err := rows.Scan(&d.Name, &ecosystem, &purl, &requirement, &depType, &integrity, &d.Direct, &d.ManifestPath, &kind); err != nil {
 			return nil, err
 		}
 
@@ -3029,9 +3030,9 @@ func (db *DB) StoreSnapshot(branchID int64, commit CommitInfo, snapshots []Snaps
 
 		// Insert snapshot (use OR IGNORE to handle duplicates within the same manifest)
 		_, err = tx.Exec(`
-			INSERT OR IGNORE INTO dependency_snapshots (commit_id, manifest_id, name, ecosystem, purl, requirement, dependency_type, integrity, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, commitID, manifestID, s.Name, s.Ecosystem, s.PURL, s.Requirement, s.DependencyType, s.Integrity, now, now)
+			INSERT OR IGNORE INTO dependency_snapshots (commit_id, manifest_id, name, ecosystem, purl, requirement, dependency_type, integrity, direct, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, commitID, manifestID, s.Name, s.Ecosystem, s.PURL, s.Requirement, s.DependencyType, s.Integrity, s.Direct, now, now)
 		if err != nil {
 			return fmt.Errorf("inserting snapshot: %w", err)
 		}

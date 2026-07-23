@@ -251,6 +251,7 @@ func (idx *Indexer) Run() (*Result, error) {
 								Requirement:    entry.Requirement,
 								DependencyType: entry.DependencyType,
 								Integrity:      entry.Integrity,
+								Direct:         entry.Direct,
 							}
 							writer.AddSnapshot(sha, manifest, snapshotInfo)
 						}
@@ -277,6 +278,7 @@ func (idx *Indexer) Run() (*Result, error) {
 						Requirement:    entry.Requirement,
 						DependencyType: entry.DependencyType,
 						Integrity:      entry.Integrity,
+						Direct:         entry.Direct,
 					}
 					writer.AddSnapshot(sha, manifest, snapshotInfo)
 				}
@@ -319,6 +321,7 @@ func (idx *Indexer) Run() (*Result, error) {
 					Requirement:    entry.Requirement,
 					DependencyType: entry.DependencyType,
 					Integrity:      entry.Integrity,
+					Direct:         entry.Direct,
 				}
 				writer.AddSnapshot(lastSHAWithChanges, manifest, snapshotInfo)
 			}
@@ -371,6 +374,7 @@ func convertDBSnapshot(dbSnapshot map[string]database.SnapshotInfo) analyzer.Sna
 			Requirement:    info.Requirement,
 			DependencyType: info.DependencyType,
 			Integrity:      info.Integrity,
+			Direct:         info.Direct,
 		}
 	}
 	return result

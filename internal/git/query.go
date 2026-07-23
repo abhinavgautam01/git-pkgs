@@ -136,6 +136,7 @@ func (r *Repository) IndexCommitSnapshot(db *database.DB, branchID int64, sha st
 			Requirement:    c.Requirement,
 			DependencyType: c.DependencyType,
 			Integrity:      c.Integrity,
+			Direct:         c.Direct,
 		})
 	}
 

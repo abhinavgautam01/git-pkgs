@@ -117,6 +117,35 @@ const uaParserPackageLockJSON = `{
     },
     "node_modules/ua-parser-js": {
       "version": "1.0.41"
+    },
+    "node_modules/some-parent": {
+      "version": "1.0.0",
+      "dependencies": {
+        "ua-parser-js": "2.0.10"
+      }
+    },
+    "node_modules/some-parent/node_modules/ua-parser-js": {
+      "version": "2.0.10"
+    }
+  }
+}
+`
+
+const uaParserAmbiguousPackageLockJSON = `{
+  "name": "license-test",
+  "version": "1.0.0",
+  "lockfileVersion": 1,
+  "dependencies": {
+    "ua-parser-js": {
+      "version": "1.0.41"
+    },
+    "some-parent": {
+      "version": "1.0.0",
+      "dependencies": {
+        "ua-parser-js": {
+          "version": "2.0.10"
+        }
+      }
     }
   }
 }
@@ -207,6 +236,9 @@ func TestLicensesCommand(t *testing.T) {
 		name           string
 		versionLicense string
 		wantLicense    string
+		wantPURL       string
+		wantVersion    string
+		wantSource     string
 		wantViolation  bool
 		wantWarning    bool
 	}{
@@ -214,15 +246,24 @@ func TestLicensesCommand(t *testing.T) {
 			name:           "license policies use installed version metadata",
 			versionLicense: "MIT",
 			wantLicense:    "MIT",
+			wantPURL:       "pkg:npm/ua-parser-js@1.0.41",
+			wantVersion:    "1.0.41",
+			wantSource:     "version",
 		},
 		{
 			name:          "license policies fall back to package metadata",
 			wantLicense:   "AGPL-3.0-or-later",
+			wantPURL:      "pkg:npm/ua-parser-js",
+			wantVersion:   "^1.0.41",
+			wantSource:    "package",
 			wantViolation: true,
 		},
 		{
 			name:          "license policies warn when version lookup fails",
 			wantLicense:   "AGPL-3.0-or-later",
+			wantPURL:      "pkg:npm/ua-parser-js",
+			wantVersion:   "^1.0.41",
+			wantSource:    "package",
 			wantViolation: true,
 			wantWarning:   true,
 		},
@@ -273,6 +314,13 @@ func TestLicensesCommand(t *testing.T) {
 			if result[0].Flagged != tt.wantViolation {
 				t.Fatalf("flagged = %v, want %v", result[0].Flagged, tt.wantViolation)
 			}
+			if result[0].PURL != tt.wantPURL || result[0].Version != tt.wantVersion {
+				t.Fatalf("package identity = %s %s, want %s %s",
+					result[0].PURL, result[0].Version, tt.wantPURL, tt.wantVersion)
+			}
+			if result[0].LicenseSource != tt.wantSource {
+				t.Fatalf("license source = %q, want %q", result[0].LicenseSource, tt.wantSource)
+			}
 
 			mock.mu.Lock()
 			getVersionCalls := mock.getVersionCalls
@@ -282,6 +330,51 @@ func TestLicensesCommand(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("ambiguous lockfile versions identify package fallback", func(t *testing.T) {
+		mock, restore := setMockEnrichmentWithVersionInfos(
+			map[string]*enrichment.PackageInfo{
+				"pkg:npm/ua-parser-js": {
+					Ecosystem: "npm",
+					Name:      "ua-parser-js",
+					License:   "AGPL-3.0-or-later",
+				},
+			},
+			nil,
+		)
+		defer restore()
+
+		initRepoWithFiles(t, map[string]string{
+			"package.json":      uaParserPackageJSON,
+			"package-lock.json": uaParserAmbiguousPackageLockJSON,
+		})
+
+		stdout, stderr, err := runCmd(t, "licenses", "--format", "json")
+		if err != nil {
+			t.Fatalf("licenses: %v", err)
+		}
+		if !strings.Contains(stderr, "could not determine installed versions") {
+			t.Fatalf("missing ambiguity warning: %s", stderr)
+		}
+
+		var result []cmd.LicenseInfo
+		if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+			t.Fatalf("parse licenses output: %v\nOutput: %s", err, stdout)
+		}
+		if len(result) != 1 {
+			t.Fatalf("license entries = %d, want 1", len(result))
+		}
+		if result[0].PURL != "pkg:npm/ua-parser-js" || result[0].LicenseSource != "package" {
+			t.Fatalf("package fallback = %+v", result[0])
+		}
+
+		mock.mu.Lock()
+		getVersionCalls := mock.getVersionCalls
+		mock.mu.Unlock()
+		if getVersionCalls != 0 {
+			t.Fatalf("GetVersion calls = %d, want 0", getVersionCalls)
+		}
+	})
 
 	t.Run("copyleft flag detects copyleft licenses", func(t *testing.T) {
 		restore := setMockEnrichment(map[string]*enrichment.PackageInfo{

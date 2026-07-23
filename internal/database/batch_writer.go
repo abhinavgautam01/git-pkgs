@@ -47,6 +47,7 @@ type SnapshotInfo struct {
 	Requirement    string
 	DependencyType string
 	Integrity      string
+	Direct         bool
 }
 
 type pendingCommit struct {
@@ -547,8 +548,8 @@ func (w *BatchWriter) insertSnapshots(tx *sql.Tx, commitIDs map[string]int64, no
 		return nil
 	}
 
-	// Snapshots have 10 columns, so max rows per batch = MaxSQLVariables / 10
-	const columnsPerRow = 10
+	// Snapshots have 11 columns, so max rows per batch = MaxSQLVariables / 11
+	const columnsPerRow = 11
 	maxRowsPerBatch := MaxSQLVariables / columnsPerRow
 
 	for start := 0; start < len(pending); start += maxRowsPerBatch {
@@ -559,14 +560,14 @@ func (w *BatchWriter) insertSnapshots(tx *sql.Tx, commitIDs map[string]int64, no
 		batch := pending[start:end]
 
 		var sb strings.Builder
-		sb.WriteString("INSERT OR IGNORE INTO dependency_snapshots (commit_id, manifest_id, name, ecosystem, purl, requirement, dependency_type, integrity, created_at, updated_at) VALUES ")
+		sb.WriteString("INSERT OR IGNORE INTO dependency_snapshots (commit_id, manifest_id, name, ecosystem, purl, requirement, dependency_type, integrity, direct, created_at, updated_at) VALUES ")
 
 		args := make([]any, 0, len(batch)*columnsPerRow)
 		for i, ps := range batch {
 			if i > 0 {
 				sb.WriteString(",")
 			}
-			sb.WriteString("(?,?,?,?,?,?,?,?,?,?)")
+			sb.WriteString("(?,?,?,?,?,?,?,?,?,?,?)")
 			args = append(args,
 				commitIDs[ps.sha],
 				w.manifestCache[ps.manifest.Path],
@@ -576,6 +577,7 @@ func (w *BatchWriter) insertSnapshots(tx *sql.Tx, commitIDs map[string]int64, no
 				ps.snapshot.Requirement,
 				ps.snapshot.DependencyType,
 				ps.snapshot.Integrity,
+				ps.snapshot.Direct,
 				now,
 				now,
 			)

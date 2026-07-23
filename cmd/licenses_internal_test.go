@@ -23,12 +23,14 @@ func TestResolvedLicenseVersions(t *testing.T) {
 		Requirement:  "1.0.41",
 		ManifestPath: "app/package-lock.json",
 		ManifestKind: manifestKindLockfile,
+		Direct:       true,
 	}
 
 	for _, tt := range []struct {
-		name     string
-		deps     []database.Dependency
-		wantPURL string
+		name          string
+		deps          []database.Dependency
+		wantPURL      string
+		wantAmbiguous bool
 	}{
 		{
 			name:     "one resolved version in the manifest directory",
@@ -36,7 +38,8 @@ func TestResolvedLicenseVersions(t *testing.T) {
 			wantPURL: "pkg:npm/ua-parser-js@1.0.41",
 		},
 		{
-			name: "multiple resolved versions are ambiguous",
+			name:     "direct resolved version disambiguates multiple versions",
+			wantPURL: "pkg:npm/ua-parser-js@1.0.41",
 			deps: []database.Dependency{
 				direct,
 				resolved,
@@ -49,6 +52,18 @@ func TestResolvedLicenseVersions(t *testing.T) {
 					ManifestKind: manifestKindLockfile,
 				},
 			},
+		},
+		{
+			name:          "multiple resolved versions without direct marker are ambiguous",
+			wantAmbiguous: true,
+			deps: func() []database.Dependency {
+				first := resolved
+				first.Direct = false
+				second := first
+				second.PURL = "pkg:npm/ua-parser-js@0.7.41"
+				second.Requirement = "0.7.41"
+				return []database.Dependency{direct, first, second}
+			}(),
 		},
 		{
 			name: "resolved version in another directory does not match",
@@ -66,7 +81,7 @@ func TestResolvedLicenseVersions(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			versions, resolvedDeps := resolvedLicenseVersions(
+			versions, resolvedDeps, ambiguous := resolvedLicenseVersions(
 				map[string]database.Dependency{direct.PURL: direct},
 				tt.deps,
 			)
@@ -79,6 +94,9 @@ func TestResolvedLicenseVersions(t *testing.T) {
 			}
 			if len(resolvedDeps) != wantDeps {
 				t.Fatalf("resolved dependencies = %d, want %d", len(resolvedDeps), wantDeps)
+			}
+			if ambiguous[direct.PURL] != tt.wantAmbiguous {
+				t.Fatalf("ambiguous = %v, want %v", ambiguous[direct.PURL], tt.wantAmbiguous)
 			}
 		})
 	}
