@@ -20,8 +20,8 @@ func addDeprecatedCmd(parent *cobra.Command) {
 	deprecatedCmd := &cobra.Command{
 		Use:     "deprecated",
 		Aliases: []string{"deprecations"},
-		Short:   "Find deprecated dependency versions",
-		Long:    `Check installed dependency versions against registries and report deprecated versions.`,
+		Short:   "Find deprecated or withdrawn dependency versions",
+		Long:    `Check installed dependency versions against registries and report deprecated, yanked, or retracted versions.`,
 		RunE:    runDeprecated,
 	}
 
@@ -36,6 +36,7 @@ type DeprecatedPackage struct {
 	Name         string `json:"name"`
 	Ecosystem    string `json:"ecosystem"`
 	Version      string `json:"version"`
+	Status       string `json:"status"`
 	Message      string `json:"message,omitempty"`
 	ManifestPath string `json:"manifest_path"`
 	PURL         string `json:"purl,omitempty"`
@@ -99,7 +100,7 @@ func runDeprecated(cmd *cobra.Command, args []string) error {
 		if format == formatJSON {
 			return outputDeprecatedJSON(cmd, []DeprecatedPackage{})
 		}
-		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No deprecated dependencies found.")
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No deprecated or withdrawn dependencies found.")
 		return nil
 	}
 
@@ -119,10 +120,21 @@ func versionedPURLForDependency(dep database.Dependency) string {
 	if dep.PURL != "" {
 		parsed, err := purl.Parse(dep.PURL)
 		if err == nil && parsed.Version != "" {
+			if isDefaultCargoIndex(parsed.Type, parsed.RepositoryURL()) {
+				return purl.MakePURLString(dep.Ecosystem, dep.Name, dep.Requirement)
+			}
 			return dep.PURL
 		}
 	}
 	return purl.MakePURLString(dep.Ecosystem, dep.Name, dep.Requirement)
+}
+
+func isDefaultCargoIndex(purlType, registryURL string) bool {
+	if registries.DefaultURL(purlType) != "https://crates.io" {
+		return false
+	}
+	registryURL = strings.TrimSuffix(registryURL, "/")
+	return registryURL == "https://github.com/rust-lang/crates.io-index" || registryURL == "https://index.crates.io"
 }
 
 func fetchDeprecatedVersionData(db *database.DB, versionedPURLs []string) map[string]*registries.Version {
@@ -246,7 +258,7 @@ func deprecatedPackages(
 	var deprecated []DeprecatedPackage
 
 	for purlStr, version := range versionData {
-		if version == nil || version.Status != registries.StatusDeprecated {
+		if version == nil || !reportableVersionStatus(version.Status) {
 			continue
 		}
 		for _, dep := range purlToDeps[purlStr] {
@@ -254,6 +266,7 @@ func deprecatedPackages(
 				Name:         dep.Name,
 				Ecosystem:    dep.Ecosystem,
 				Version:      dep.Requirement,
+				Status:       string(version.Status),
 				Message:      deprecationMessage(version),
 				ManifestPath: dep.ManifestPath,
 				PURL:         purlStr,
@@ -272,6 +285,10 @@ func deprecatedPackages(
 	})
 
 	return deprecated
+}
+
+func reportableVersionStatus(status registries.VersionStatus) bool {
+	return status == registries.StatusDeprecated || isWithdrawnVersionStatus(string(status))
 }
 
 func deprecationMessage(version *registries.Version) string {
@@ -305,9 +322,9 @@ func outputDeprecatedJSON(cmd *cobra.Command, deprecated []DeprecatedPackage) er
 }
 
 func outputDeprecatedText(cmd *cobra.Command, deprecated []DeprecatedPackage) {
-	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Found %d deprecated dependencies:\n\n", len(deprecated))
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Found %d deprecated or withdrawn dependencies:\n\n", len(deprecated))
 	for _, dep := range deprecated {
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s %s %s\n", dep.Name, dep.Version, Dim("("+dep.ManifestPath+")"))
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s %s [%s] %s\n", dep.Name, dep.Version, dep.Status, Dim("("+dep.ManifestPath+")"))
 		if dep.Message != "" {
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s\n", dep.Message)
 		}

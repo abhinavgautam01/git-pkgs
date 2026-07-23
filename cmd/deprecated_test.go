@@ -35,6 +35,18 @@ func TestVersionedPURLForDependency(t *testing.T) {
 			t.Fatalf("versioned PURL = %q, want existing PURL", got)
 		}
 	})
+
+	t.Run("normalizes the default crates.io index URL", func(t *testing.T) {
+		got := versionedPURLForDependency(database.Dependency{
+			PURL:        "pkg:cargo/time@0.3.50?repository_url=https:%2F%2Fgithub.com%2Frust-lang%2Fcrates.io-index",
+			Name:        "time",
+			Ecosystem:   "cargo",
+			Requirement: "0.3.50",
+		})
+		if got != "pkg:cargo/time@0.3.50" {
+			t.Fatalf("versioned PURL = %q, want unqualified crates.io PURL", got)
+		}
+	})
 }
 
 func TestDeprecatedPackages(t *testing.T) {
@@ -55,6 +67,22 @@ func TestDeprecatedPackages(t *testing.T) {
 				ManifestPath: "package-lock.json",
 			},
 		},
+		"pkg:cargo/time@0.3.50": {
+			{
+				Name:         "time",
+				Ecosystem:    "cargo",
+				Requirement:  "0.3.50",
+				ManifestPath: "Cargo.lock",
+			},
+		},
+		"pkg:golang/example.com/retracted@v1.1.0": {
+			{
+				Name:         "example.com/retracted",
+				Ecosystem:    "golang",
+				Requirement:  "v1.1.0",
+				ManifestPath: "go.sum",
+			},
+		},
 	}
 	versionData := map[string]*registries.Version{
 		"pkg:npm/request@2.88.2": {
@@ -68,17 +96,35 @@ func TestDeprecatedPackages(t *testing.T) {
 			Number: "4.17.21",
 			Status: registries.StatusNone,
 		},
+		"pkg:cargo/time@0.3.50": {
+			Number: "0.3.50",
+			Status: registries.StatusYanked,
+		},
+		"pkg:golang/example.com/retracted@v1.1.0": {
+			Number: "v1.1.0",
+			Status: registries.StatusRetracted,
+		},
 	}
 
 	got := deprecatedPackages(purlToDeps, versionData)
-	if len(got) != 1 {
-		t.Fatalf("deprecated count = %d, want 1", len(got))
+	if len(got) != 3 {
+		t.Fatalf("reported count = %d, want 3", len(got))
 	}
-	if got[0].Name != "request" {
-		t.Fatalf("deprecated package = %q, want request", got[0].Name)
+	byName := make(map[string]DeprecatedPackage, len(got))
+	for _, dep := range got {
+		byName[dep.Name] = dep
 	}
-	if got[0].Message != "request has been deprecated" {
-		t.Fatalf("message = %q, want deprecation message", got[0].Message)
+	if byName["request"].Status != string(registries.StatusDeprecated) {
+		t.Fatalf("request status = %q, want deprecated", byName["request"].Status)
+	}
+	if byName["request"].Message != "request has been deprecated" {
+		t.Fatalf("message = %q, want deprecation message", byName["request"].Message)
+	}
+	if byName["time"].Status != string(registries.StatusYanked) {
+		t.Fatalf("time status = %q, want yanked", byName["time"].Status)
+	}
+	if byName["example.com/retracted"].Status != string(registries.StatusRetracted) {
+		t.Fatalf("Go module status = %q, want retracted", byName["example.com/retracted"].Status)
 	}
 }
 
