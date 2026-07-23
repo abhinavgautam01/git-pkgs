@@ -2,7 +2,10 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"path"
+	"strings"
 	"time"
 
 	"github.com/git-pkgs/git-pkgs/internal/database"
@@ -64,10 +67,21 @@ func runSBOM(cmd *cobra.Command, args []string) error {
 	}
 
 	deps = filterByEcosystem(deps, ecosystem)
+	deps = selectSBOMDependencies(deps)
 
 	licenseMap := map[string]string{}
 	if !skipEnrichment {
-		licenseMap = enrichLicenses(db, deps)
+		var packageFallbacks int
+		licenseMap, packageFallbacks, err = enrichLicenses(db, deps)
+		if err != nil {
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Warning: SBOM license enrichment incomplete: %v\n", err)
+		}
+		if packageFallbacks > 0 {
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(),
+				"Warning: using package-level license metadata for %d SBOM component(s) without version license metadata\n",
+				packageFallbacks,
+			)
+		}
 	}
 
 	if projectName == "" {
@@ -100,10 +114,7 @@ func buildSBOM(deps []database.Dependency, licenses map[string]string, name, ver
 		Creators:  []sbom.Creator{{Type: "Tool", Name: "git-pkgs-" + version}},
 	}
 	for _, d := range deps {
-		purlStr := d.PURL
-		if purlStr == "" {
-			purlStr = purl.MakePURLString(d.Ecosystem, d.Name, d.Requirement)
-		}
+		purlStr := sbomPURLForDependency(d)
 		p := sbom.Package{
 			Name:    d.Name,
 			Version: d.Requirement,
@@ -113,8 +124,7 @@ func buildSBOM(deps []database.Dependency, licenses map[string]string, name, ver
 				Category: "PACKAGE_MANAGER", Type: "purl", Locator: purlStr,
 			}}
 		}
-		licKey := purl.MakePURLString(d.Ecosystem, d.Name, "")
-		if lic := licenses[licKey]; lic != "" {
+		if lic := licenses[purlStr]; lic != "" {
 			p.LicenseConcluded = lic
 			p.LicenseDeclared = lic
 		}
@@ -123,24 +133,111 @@ func buildSBOM(deps []database.Dependency, licenses map[string]string, name, ver
 	return s
 }
 
-func enrichLicenses(db *database.DB, deps []database.Dependency) map[string]string {
-	purls := make([]string, 0, len(deps))
-	purlToDep := make(map[string]database.Dependency)
-	for _, d := range deps {
-		purlStr := purl.MakePURLString(d.Ecosystem, d.Name, "")
-		if purlStr != "" {
-			purls = append(purls, purlStr)
-			purlToDep[purlStr] = d
+func sbomPURLForDependency(dep database.Dependency) string {
+	if isResolvedDependency(dep) {
+		if versionedPURL := versionedPURLForDependency(dep); versionedPURL != "" {
+			return versionedPURL
 		}
 	}
+	if dep.PURL != "" {
+		return dep.PURL
+	}
+	if dep.Ecosystem == "" || dep.Name == "" {
+		return ""
+	}
+	return purl.MakePURLString(dep.Ecosystem, dep.Name, "")
+}
+
+func selectSBOMDependencies(deps []database.Dependency) []database.Dependency {
+	resolvedLocations := make(map[string]bool)
+	for _, dep := range deps {
+		if isResolvedDependency(dep) {
+			resolvedLocations[sbomDependencyLocation(dep)] = true
+		}
+	}
+
+	selected := make([]database.Dependency, 0, len(deps))
+	seen := make(map[string]bool)
+	for _, dep := range deps {
+		if !isResolvedDependency(dep) && resolvedLocations[sbomDependencyLocation(dep)] {
+			continue
+		}
+		key := sbomDependencyKey(dep)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		selected = append(selected, dep)
+	}
+	return selected
+}
+
+func sbomDependencyKey(dep database.Dependency) string {
+	if purlStr := sbomPURLForDependency(dep); purlStr != "" {
+		return "purl\x00" + purlStr
+	}
+	return "dependency\x00" + strings.ToLower(dep.Ecosystem) + "\x00" +
+		strings.ToLower(dep.Name) + "\x00" + dep.Requirement
+}
+
+func sbomDependencyLocation(dep database.Dependency) string {
+	return strings.ToLower(dep.Ecosystem) + "\x00" + strings.ToLower(dep.Name) + "\x00" + path.Dir(dep.ManifestPath)
+}
+
+func enrichLicenses(db *database.DB, deps []database.Dependency) (map[string]string, int, error) {
+	purls := make([]string, 0, len(deps))
+	purlToDep := make(map[string]database.Dependency)
+	seen := make(map[string]bool)
+	for _, d := range deps {
+		purlStr := licensePackagePURLForDependency(d)
+		if purlStr == "" || seen[purlStr] {
+			continue
+		}
+		seen[purlStr] = true
+		purls = append(purls, purlStr)
+		purlToDep[purlStr] = d
+	}
 	if len(purls) == 0 {
-		return nil
+		return map[string]string{}, 0, nil
 	}
-	data, err := getSBOMLicenseData(db, purls, purlToDep)
-	if err != nil {
-		return nil
+
+	packageLicenses, packageErr := getSBOMLicenseData(db, purls, purlToDep)
+	resolved := make([]database.Dependency, 0, len(deps))
+	for _, dep := range deps {
+		if isResolvedDependency(dep) {
+			resolved = append(resolved, dep)
+		}
 	}
-	return data
+	versionLicenses, versionErr := loadLicenseVersionLicenses(db, resolved, false)
+
+	licenses, packageFallbacks := selectSBOMLicenses(deps, packageLicenses, versionLicenses)
+	return licenses, packageFallbacks, errors.Join(packageErr, versionErr)
+}
+
+func selectSBOMLicenses(
+	deps []database.Dependency,
+	packageLicenses map[string]string,
+	versionLicenses map[string]string,
+) (map[string]string, int) {
+	licenses := make(map[string]string)
+	fallbacks := make(map[string]bool)
+	for _, dep := range deps {
+		componentPURL := sbomPURLForDependency(dep)
+		if componentPURL == "" {
+			continue
+		}
+		if versionLicense := versionLicenses[versionedPURLForDependency(dep)]; versionLicense != "" {
+			licenses[componentPURL] = versionLicense
+			continue
+		}
+		packageLicense := packageLicenses[licensePackagePURLForDependency(dep)]
+		if packageLicense == "" {
+			continue
+		}
+		licenses[componentPURL] = packageLicense
+		fallbacks[componentPURL] = true
+	}
+	return licenses, len(fallbacks)
 }
 
 func getSBOMLicenseData(db *database.DB, purls []string, purlToDep map[string]database.Dependency) (map[string]string, error) {
