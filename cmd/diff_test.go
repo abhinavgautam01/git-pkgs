@@ -560,6 +560,72 @@ func TestComputeDiffByEcosystem_IgnoresLockfileMigration(t *testing.T) {
 	}
 }
 
+func TestDiffKindFilter(t *testing.T) {
+	fromDeps := []database.Dependency{
+		{Name: "lodash", Ecosystem: "npm", Requirement: "^4.0.0", ManifestPath: "package.json", ManifestKind: manifestKindManifest},
+		{Name: "lodash", Ecosystem: "npm", Requirement: "4.17.20", ManifestPath: "package-lock.json", ManifestKind: manifestKindLockfile},
+		{Name: "chalk", Ecosystem: "npm", Requirement: "5.3.0", ManifestPath: "package-lock.json", ManifestKind: manifestKindLockfile},
+	}
+	toDeps := []database.Dependency{
+		{Name: "lodash", Ecosystem: "npm", Requirement: "^4.0.0", ManifestPath: "package.json", ManifestKind: manifestKindManifest},
+		{Name: "lodash", Ecosystem: "npm", Requirement: "4.17.21", ManifestPath: "package-lock.json", ManifestKind: manifestKindLockfile},
+		{Name: "express", Ecosystem: "npm", Requirement: "^4.18.0", ManifestPath: "package.json", ManifestKind: manifestKindManifest},
+		{Name: "express", Ecosystem: "npm", Requirement: "4.18.2", ManifestPath: "package-lock.json", ManifestKind: manifestKindLockfile},
+	}
+
+	lock := computeDiff(filterDepsByKind(fromDeps, manifestKindLockfile), filterDepsByKind(toDeps, manifestKindLockfile))
+	if len(lock.Added) != 1 || lock.Added[0].ManifestPath != "package-lock.json" || lock.Added[0].ManifestKind != manifestKindLockfile {
+		t.Fatalf("lockfile added = %+v, want 1 from package-lock.json", lock.Added)
+	}
+	if len(lock.Modified) != 1 || lock.Modified[0].ToRequirement != "4.17.21" {
+		t.Fatalf("lockfile modified = %+v, want 1 lodash 4.17.21", lock.Modified)
+	}
+	if len(lock.Removed) != 1 || lock.Removed[0].Name != "chalk" {
+		t.Fatalf("lockfile removed = %+v, want 1 chalk", lock.Removed)
+	}
+
+	manifest := computeDiff(filterDepsByKind(fromDeps, manifestKindManifest), filterDepsByKind(toDeps, manifestKindManifest))
+	if len(manifest.Added) != 1 || manifest.Added[0].ManifestPath != "package.json" {
+		t.Fatalf("manifest added = %+v, want 1 from package.json", manifest.Added)
+	}
+	if len(manifest.Modified) != 0 {
+		t.Fatalf("manifest modified = %+v, want 0", manifest.Modified)
+	}
+	if len(manifest.Removed) != 0 {
+		t.Fatalf("manifest removed = %+v, want 0", manifest.Removed)
+	}
+}
+
+func TestDiffKindFilter_ByEcosystem(t *testing.T) {
+	// Manifest row first in the slice, lockfile row second: without pre-
+	// filtering, --by ecosystem would key both under (npm, lodash) and pick
+	// the manifest row as the reference, hiding the lockfile bump.
+	fromDeps := []database.Dependency{
+		{Name: "lodash", Ecosystem: "npm", Requirement: "^4.0.0", ManifestPath: "package.json", ManifestKind: manifestKindManifest},
+		{Name: "lodash", Ecosystem: "npm", Requirement: "4.17.20", ManifestPath: "package-lock.json", ManifestKind: manifestKindLockfile},
+	}
+	toDeps := []database.Dependency{
+		{Name: "lodash", Ecosystem: "npm", Requirement: "^4.0.0", ManifestPath: "package.json", ManifestKind: manifestKindManifest},
+		{Name: "lodash", Ecosystem: "npm", Requirement: "4.17.21", ManifestPath: "package-lock.json", ManifestKind: manifestKindLockfile},
+	}
+
+	result := computeDiffBy(
+		filterDepsByKind(fromDeps, manifestKindLockfile),
+		filterDepsByKind(toDeps, manifestKindLockfile),
+		diffByEcosystem,
+	)
+	if len(result.Modified) != 1 {
+		t.Fatalf("modified = %+v, want 1", result.Modified)
+	}
+	m := result.Modified[0]
+	if m.FromRequirement != "4.17.20" || m.ToRequirement != "4.17.21" {
+		t.Fatalf("requirements = %s -> %s, want 4.17.20 -> 4.17.21", m.FromRequirement, m.ToRequirement)
+	}
+	if m.ManifestKind != manifestKindLockfile {
+		t.Fatalf("manifest kind = %q, want lockfile", m.ManifestKind)
+	}
+}
+
 func TestComputeDiffByEcosystem_ReportsVersionChangeAcrossLockfileMigration(t *testing.T) {
 	fromDeps := []database.Dependency{
 		{Name: "express", Ecosystem: "npm", Requirement: "4.18.2", ManifestPath: "package-lock.json", ManifestKind: manifestKindLockfile},

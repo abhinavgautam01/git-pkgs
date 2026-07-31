@@ -27,6 +27,7 @@ Supports range syntax (main..feature) or explicit --from/--to flags.`,
 	diffCmd.Flags().String("to", "", "Ending commit (default: working tree)")
 	diffCmd.Flags().StringP("ecosystem", "e", "", "Filter by ecosystem")
 	diffCmd.Flags().StringP("type", "t", "", "Filter by dependency type (runtime, development, etc.)")
+	diffCmd.Flags().String("kind", "", "Filter by manifest kind: manifest, lockfile")
 	diffCmd.Flags().StringP("format", "f", "text", "Output format: text, json")
 	diffCmd.Flags().String("by", diffByManifest, "Match dependencies by: manifest, ecosystem")
 	diffCmd.Flags().Bool("stat", false, "Show aggregate dependency change counts")
@@ -49,6 +50,7 @@ type DiffEntry struct {
 	Name            string `json:"name"`
 	Ecosystem       string `json:"ecosystem,omitempty"`
 	ManifestPath    string `json:"manifest_path"`
+	ManifestKind    string `json:"manifest_kind,omitempty"`
 	DependencyType  string `json:"dependency_type,omitempty"`
 	FromRequirement string `json:"from_requirement,omitempty"`
 	ToRequirement   string `json:"to_requirement,omitempty"`
@@ -69,6 +71,8 @@ func runDiff(cmd *cobra.Command, args []string) error {
 	toRef, _ := cmd.Flags().GetString("to")
 	ecosystem, _ := cmd.Flags().GetString("ecosystem")
 	depType, _ := cmd.Flags().GetString("type")
+	kind, _ := cmd.Flags().GetString("kind")
+	kind = strings.ToLower(kind)
 	format, err := getFormatFlag(cmd, formatText, formatJSON)
 	if err != nil {
 		return err
@@ -80,6 +84,9 @@ func runDiff(cmd *cobra.Command, args []string) error {
 
 	if by != diffByManifest && by != diffByEcosystem {
 		return fmt.Errorf("--by must be one of: %s, %s", diffByManifest, diffByEcosystem)
+	}
+	if kind != "" && kind != manifestKindManifest && kind != manifestKindLockfile {
+		return fmt.Errorf("--kind must be one of: %s, %s", manifestKindManifest, manifestKindLockfile)
 	}
 
 	// Parse range syntax if provided
@@ -109,9 +116,9 @@ func runDiff(cmd *cobra.Command, args []string) error {
 	// When comparing to working tree, use direct parsing since there's
 	// no database state for uncommitted changes
 	if toRef == "" {
-		result, err = diffWithWorkingTree(repo, fromRef, includeSubmodules, by)
+		result, err = diffWithWorkingTree(repo, fromRef, includeSubmodules, by, kind)
 	} else {
-		result, err = diffBetweenCommits(repo, fromRef, toRef, by)
+		result, err = diffBetweenCommits(repo, fromRef, toRef, by, kind)
 	}
 	if err != nil {
 		return err
@@ -141,7 +148,7 @@ func runDiff(cmd *cobra.Command, args []string) error {
 }
 
 // diffBetweenCommits compares dependencies between two commits using on-demand indexing.
-func diffBetweenCommits(repo *git.Repository, fromRef, toRef, by string) (*DiffResult, error) {
+func diffBetweenCommits(repo *git.Repository, fromRef, toRef, by, kind string) (*DiffResult, error) {
 	fromDeps, err := repo.GetDependencies(fromRef, "")
 	if err != nil {
 		return nil, fmt.Errorf("getting deps at %s: %w", fromRef, err)
@@ -152,11 +159,11 @@ func diffBetweenCommits(repo *git.Repository, fromRef, toRef, by string) (*DiffR
 		return nil, fmt.Errorf("getting deps at %s: %w", toRef, err)
 	}
 
-	return computeDiffBy(fromDeps, toDeps, by), nil
+	return computeDiffBy(filterDepsByKind(fromDeps, kind), filterDepsByKind(toDeps, kind), by), nil
 }
 
 // diffWithWorkingTree compares dependencies between a commit and the working tree.
-func diffWithWorkingTree(repo *git.Repository, fromRef string, includeSubmodules bool, by string) (*DiffResult, error) {
+func diffWithWorkingTree(repo *git.Repository, fromRef string, includeSubmodules bool, by, kind string) (*DiffResult, error) {
 	fromDeps, err := repo.GetDependencies(fromRef, "")
 	if err != nil {
 		return nil, fmt.Errorf("getting deps at %s: %w", fromRef, err)
@@ -175,7 +182,24 @@ func diffWithWorkingTree(repo *git.Repository, fromRef string, includeSubmodules
 	}
 	toDeps := changesToDeps(toChanges)
 
-	return computeDiffBy(fromDeps, toDeps, by), nil
+	return computeDiffBy(filterDepsByKind(fromDeps, kind), filterDepsByKind(toDeps, kind), by), nil
+}
+
+// filterDepsByKind drops dependencies whose ManifestKind doesn't match kind.
+// Filtering before computeDiffBy (rather than on the result) means --by
+// ecosystem never merges manifest and lockfile rows into the same bucket,
+// so a lockfile-only version bump can't be masked by a manifest row.
+func filterDepsByKind(deps []database.Dependency, kind string) []database.Dependency {
+	if kind == "" {
+		return deps
+	}
+	out := make([]database.Dependency, 0, len(deps))
+	for _, d := range deps {
+		if d.ManifestKind == kind {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 func changesToDeps(changes []analyzer.Change) []database.Dependency {
@@ -225,6 +249,7 @@ func computeDiffBy(fromDeps, toDeps []database.Dependency, by string) *DiffResul
 					Name:           d.Name,
 					Ecosystem:      d.Ecosystem,
 					ManifestPath:   d.ManifestPath,
+					ManifestKind:   d.ManifestKind,
 					DependencyType: d.DependencyType,
 					ToRequirement:  d.Requirement,
 				})
@@ -239,6 +264,7 @@ func computeDiffBy(fromDeps, toDeps []database.Dependency, by string) *DiffResul
 					Name:            toList[0].Name,
 					Ecosystem:       toList[0].Ecosystem,
 					ManifestPath:    toList[0].ManifestPath,
+					ManifestKind:    toList[0].ManifestKind,
 					DependencyType:  toList[0].DependencyType,
 					FromRequirement: fromList[0].Requirement,
 					ToRequirement:   toList[0].Requirement,
@@ -298,6 +324,7 @@ func computeDiffBy(fromDeps, toDeps []database.Dependency, by string) *DiffResul
 				Name:            ref.Name,
 				Ecosystem:       ref.Ecosystem,
 				ManifestPath:    ref.ManifestPath,
+				ManifestKind:    ref.ManifestKind,
 				DependencyType:  ref.DependencyType,
 				FromRequirement: removedVersions[i],
 				ToRequirement:   addedVersions[i],
@@ -309,6 +336,7 @@ func computeDiffBy(fromDeps, toDeps []database.Dependency, by string) *DiffResul
 				Name:           ref.Name,
 				Ecosystem:      ref.Ecosystem,
 				ManifestPath:   ref.ManifestPath,
+				ManifestKind:   ref.ManifestKind,
 				DependencyType: ref.DependencyType,
 				ToRequirement:  addedVersions[i],
 			})
@@ -319,6 +347,7 @@ func computeDiffBy(fromDeps, toDeps []database.Dependency, by string) *DiffResul
 				Name:            ref.Name,
 				Ecosystem:       ref.Ecosystem,
 				ManifestPath:    ref.ManifestPath,
+				ManifestKind:    ref.ManifestKind,
 				DependencyType:  ref.DependencyType,
 				FromRequirement: removedVersions[i],
 			})
@@ -333,6 +362,7 @@ func computeDiffBy(fromDeps, toDeps []database.Dependency, by string) *DiffResul
 					Name:            d.Name,
 					Ecosystem:       d.Ecosystem,
 					ManifestPath:    d.ManifestPath,
+					ManifestKind:    d.ManifestKind,
 					DependencyType:  d.DependencyType,
 					FromRequirement: d.Requirement,
 				})
@@ -371,36 +401,32 @@ func sortDiffEntries(entries []DiffEntry) {
 }
 
 func filterDiffResult(result *DiffResult, ecosystem, depType string) *DiffResult {
-	filtered := &DiffResult{}
-
-	for _, e := range result.Added {
+	keep := func(e DiffEntry) bool {
 		if ecosystem != "" && !strings.EqualFold(e.Ecosystem, ecosystem) {
-			continue
+			return false
 		}
 		if depType != "" && !strings.EqualFold(e.DependencyType, depType) {
-			continue
+			return false
 		}
-		filtered.Added = append(filtered.Added, e)
+		return true
+	}
+
+	filtered := &DiffResult{}
+	for _, e := range result.Added {
+		if keep(e) {
+			filtered.Added = append(filtered.Added, e)
+		}
 	}
 	for _, e := range result.Modified {
-		if ecosystem != "" && !strings.EqualFold(e.Ecosystem, ecosystem) {
-			continue
+		if keep(e) {
+			filtered.Modified = append(filtered.Modified, e)
 		}
-		if depType != "" && !strings.EqualFold(e.DependencyType, depType) {
-			continue
-		}
-		filtered.Modified = append(filtered.Modified, e)
 	}
 	for _, e := range result.Removed {
-		if ecosystem != "" && !strings.EqualFold(e.Ecosystem, ecosystem) {
-			continue
+		if keep(e) {
+			filtered.Removed = append(filtered.Removed, e)
 		}
-		if depType != "" && !strings.EqualFold(e.DependencyType, depType) {
-			continue
-		}
-		filtered.Removed = append(filtered.Removed, e)
 	}
-
 	return filtered
 }
 
