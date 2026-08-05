@@ -15,6 +15,7 @@ import (
 	"github.com/git-pkgs/git-pkgs/internal/database"
 	gitpkg "github.com/git-pkgs/git-pkgs/internal/git"
 	"github.com/git-pkgs/sbom"
+	"github.com/git-pkgs/spdx"
 	gitgo "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -126,37 +127,64 @@ func TestProjectLicenseAtRevision(t *testing.T) {
 		t.Fatalf("OpenRepository: %v", err)
 	}
 
-	got, err := projectLicenseAtRevision(repo, first.String())
+	got, err := projectLicensesAtRevision(repo, first.String())
 	if err != nil {
-		t.Fatalf("projectLicenseAtRevision(first): %v", err)
+		t.Fatalf("projectLicensesAtRevision(first): %v", err)
 	}
-	if got != "MIT" {
-		t.Fatalf("first revision license = %q, want MIT", got)
+	if got.Expression != "MIT" || len(got.Names) != 0 {
+		t.Fatalf("first revision licenses = %+v, want MIT", got)
 	}
 
-	got, err = projectLicenseAtRevision(repo, "HEAD")
+	got, err = projectLicensesAtRevision(repo, "HEAD")
 	if err != nil {
-		t.Fatalf("projectLicenseAtRevision(HEAD): %v", err)
+		t.Fatalf("projectLicensesAtRevision(HEAD): %v", err)
 	}
-	if got != "Apache-2.0" {
-		t.Fatalf("HEAD license = %q, want Apache-2.0", got)
+	if got.Expression != "Apache-2.0" || len(got.Names) != 0 {
+		t.Fatalf("HEAD licenses = %+v, want Apache-2.0", got)
+	}
+}
+
+func TestNormalizeProjectLicensesSeparatesNonSPDXNames(t *testing.T) {
+	licenses := normalizeProjectLicenses([]string{
+		"BSD-3-Clause",
+		"License :: OSI Approved :: BSD License",
+		"Acme Internal Terms",
+	})
+
+	if licenses.Expression == "" || !spdx.Valid(licenses.Expression) {
+		t.Fatalf("normalized expression = %q, want valid SPDX", licenses.Expression)
+	}
+	if strings.Contains(licenses.Expression, "License ::") {
+		t.Fatalf("normalized expression contains raw classifier: %q", licenses.Expression)
+	}
+	if len(licenses.Names) != 1 || licenses.Names[0] != "Acme Internal Terms" {
+		t.Fatalf("non-SPDX names = %q, want [Acme Internal Terms]", licenses.Names)
+	}
+	if expression := licenses.spdxExpression(); !spdx.Valid(expression) {
+		t.Fatalf("SPDX expression with LicenseRef = %q, want valid SPDX", expression)
 	}
 }
 
 func TestEncodeSBOMWithRootLicense(t *testing.T) {
 	document := buildSBOM(nil, nil, "demo", "1.0.0")
-	const license = "MIT OR Apache-2.0"
+	licenses := projectLicenses{
+		Expression: "MIT OR Apache-2.0",
+		Names:      []string{"Acme Internal Terms"},
+	}
 
 	t.Run("CycloneDX JSON", func(t *testing.T) {
 		var output bytes.Buffer
-		if err := encodeSBOMWithRootLicense(&output, document, sbom.FormatCycloneDXJSON, license); err != nil {
-			t.Fatalf("encodeSBOMWithRootLicense: %v", err)
+		if err := encodeSBOMWithRootLicenses(&output, document, sbom.FormatCycloneDXJSON, licenses); err != nil {
+			t.Fatalf("encodeSBOMWithRootLicenses: %v", err)
 		}
 		var result struct {
 			Metadata struct {
 				Component struct {
 					Licenses []struct {
 						Expression string `json:"expression"`
+						License    *struct {
+							Name string `json:"name"`
+						} `json:"license"`
 					} `json:"licenses"`
 				} `json:"component"`
 			} `json:"metadata"`
@@ -164,50 +192,68 @@ func TestEncodeSBOMWithRootLicense(t *testing.T) {
 		if err := json.Unmarshal(output.Bytes(), &result); err != nil {
 			t.Fatalf("Unmarshal: %v\n%s", err, output.String())
 		}
-		if len(result.Metadata.Component.Licenses) != 1 ||
-			result.Metadata.Component.Licenses[0].Expression != license {
-			t.Fatalf("root licenses = %+v, want %q", result.Metadata.Component.Licenses, license)
+		got := result.Metadata.Component.Licenses
+		if len(got) != 2 || got[0].Expression != licenses.Expression ||
+			got[1].License == nil || got[1].License.Name != licenses.Names[0] {
+			t.Fatalf("root licenses = %+v, want expression and name", got)
 		}
 	})
 
 	t.Run("CycloneDX XML", func(t *testing.T) {
 		var output bytes.Buffer
-		if err := encodeSBOMWithRootLicense(&output, document, sbom.FormatCycloneDXXML, license); err != nil {
-			t.Fatalf("encodeSBOMWithRootLicense: %v", err)
+		if err := encodeSBOMWithRootLicenses(&output, document, sbom.FormatCycloneDXXML, licenses); err != nil {
+			t.Fatalf("encodeSBOMWithRootLicenses: %v", err)
 		}
 		var result struct {
 			Metadata struct {
 				Component struct {
-					LicenseExpression string `xml:"licenses>expression"`
+					LicenseExpression string   `xml:"licenses>expression"`
+					LicenseNames      []string `xml:"licenses>license>name"`
 				} `xml:"component"`
 			} `xml:"metadata"`
 		}
 		if err := xml.Unmarshal(output.Bytes(), &result); err != nil {
 			t.Fatalf("Unmarshal: %v\n%s", err, output.String())
 		}
-		if result.Metadata.Component.LicenseExpression != license {
-			t.Fatalf("root license = %q, want %q", result.Metadata.Component.LicenseExpression, license)
+		component := result.Metadata.Component
+		if component.LicenseExpression != licenses.Expression ||
+			len(component.LicenseNames) != 1 || component.LicenseNames[0] != licenses.Names[0] {
+			t.Fatalf("root licenses = %+v, want expression and name", component)
 		}
 	})
 
 	t.Run("SPDX JSON", func(t *testing.T) {
 		var output bytes.Buffer
-		if err := encodeSBOMWithRootLicense(&output, document, sbom.FormatSPDXJSON, license); err != nil {
-			t.Fatalf("encodeSBOMWithRootLicense: %v", err)
+		if err := encodeSBOMWithRootLicenses(&output, document, sbom.FormatSPDXJSON, licenses); err != nil {
+			t.Fatalf("encodeSBOMWithRootLicenses: %v", err)
 		}
 		var result struct {
 			Packages []struct {
 				SPDXID          string `json:"SPDXID"`
 				LicenseDeclared string `json:"licenseDeclared"`
 			} `json:"packages"`
+			ExtractedLicensingInfos []struct {
+				LicenseID     string `json:"licenseId"`
+				Name          string `json:"name"`
+				ExtractedText string `json:"extractedText"`
+			} `json:"hasExtractedLicensingInfos"`
 		}
 		if err := json.Unmarshal(output.Bytes(), &result); err != nil {
 			t.Fatalf("Unmarshal: %v\n%s", err, output.String())
 		}
 		for _, pkg := range result.Packages {
 			if pkg.SPDXID == spdxRootPackageID {
-				if pkg.LicenseDeclared != license {
-					t.Fatalf("root license = %q, want %q", pkg.LicenseDeclared, license)
+				if !spdx.Valid(pkg.LicenseDeclared) ||
+					!strings.Contains(pkg.LicenseDeclared, licenseRefForName(licenses.Names[0])) {
+					t.Fatalf("root license = %q, want valid SPDX expression with LicenseRef", pkg.LicenseDeclared)
+				}
+				if len(result.ExtractedLicensingInfos) != 1 {
+					t.Fatalf("extracted licensing infos = %+v, want one", result.ExtractedLicensingInfos)
+				}
+				info := result.ExtractedLicensingInfos[0]
+				if info.LicenseID != licenseRefForName(licenses.Names[0]) ||
+					info.Name != licenses.Names[0] || info.ExtractedText != licenses.Names[0] {
+					t.Fatalf("extracted licensing info = %+v", info)
 				}
 				return
 			}

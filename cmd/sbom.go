@@ -88,13 +88,13 @@ func runSBOM(cmd *cobra.Command, args []string) error {
 		projectName = "project"
 	}
 
-	projectLicense, err := projectLicenseAtRevision(repo, commit)
+	projectLicenses, err := projectLicensesAtRevision(repo, commit)
 	if err != nil {
-		return fmt.Errorf("loading project license: %w", err)
+		return fmt.Errorf("loading project licenses: %w", err)
 	}
 
 	doc := buildSBOM(deps, licenseMap, projectName, projectVersion)
-	return encodeSBOMWithRootLicense(cmd.OutOrStdout(), doc, out, projectLicense)
+	return encodeSBOMWithRootLicenses(cmd.OutOrStdout(), doc, out, projectLicenses)
 }
 
 func sbomFormat(sbomType, format string) (sbom.Format, error) {
