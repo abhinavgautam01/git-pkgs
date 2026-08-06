@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -885,6 +886,71 @@ func TestDiffFileCommand(t *testing.T) {
 		output := stdout.String()
 		if !strings.Contains(output, "express") {
 			t.Errorf("expected 'express' in diff output, got: %s", output)
+		}
+	})
+
+	t.Run("reports declared license changes", func(t *testing.T) {
+		repoDir := createTestRepo(t)
+
+		cleanup := chdir(t, repoDir)
+		defer cleanup()
+
+		writeFile(t, repoDir, "old.json", `{"license":"MIT","dependencies":{"lodash":"^4.17.21"}}`)
+		writeFile(t, repoDir, "new.json", `{"license":"Apache-2.0","dependencies":{"lodash":"^4.17.21"}}`)
+
+		var stdout bytes.Buffer
+		rootCmd := cmd.NewRootCmd()
+		rootCmd.SetArgs([]string{"diff-file", "old.json", "new.json", "--filename", "package.json"})
+		rootCmd.SetOut(&stdout)
+
+		if err := rootCmd.Execute(); err != nil {
+			t.Fatalf("diff-file failed: %v", err)
+		}
+
+		output := stdout.String()
+		for _, expected := range []string{"Declared licenses:", "MIT", "Apache-2.0", "package.json"} {
+			if !strings.Contains(output, expected) {
+				t.Errorf("expected %q in diff output, got: %s", expected, output)
+			}
+		}
+	})
+
+	t.Run("reports declared license changes as json", func(t *testing.T) {
+		repoDir := createTestRepo(t)
+
+		cleanup := chdir(t, repoDir)
+		defer cleanup()
+
+		writeFile(t, repoDir, "old.json", `{"licenses":[{"type":"MIT"},{"type":"ISC"}]}`)
+		writeFile(t, repoDir, "new.json", `{"licenses":[{"type":"Apache-2.0"}]}`)
+
+		var stdout bytes.Buffer
+		rootCmd := cmd.NewRootCmd()
+		rootCmd.SetArgs([]string{"diff-file", "old.json", "new.json", "--filename", "package.json", "--format", "json"})
+		rootCmd.SetOut(&stdout)
+
+		if err := rootCmd.Execute(); err != nil {
+			t.Fatalf("diff-file failed: %v", err)
+		}
+
+		var result struct {
+			LicenseChanges []struct {
+				ManifestPath string   `json:"manifest_path"`
+				FromLicenses []string `json:"from_licenses"`
+				ToLicenses   []string `json:"to_licenses"`
+			} `json:"license_changes"`
+		}
+		if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+			t.Fatalf("decoding diff-file JSON: %v\n%s", err, stdout.String())
+		}
+		if len(result.LicenseChanges) != 1 {
+			t.Fatalf("license changes = %+v, want one", result.LicenseChanges)
+		}
+		change := result.LicenseChanges[0]
+		if change.ManifestPath != "package.json" ||
+			!slices.Equal(change.FromLicenses, []string{"ISC", "MIT"}) ||
+			!slices.Equal(change.ToLicenses, []string{"Apache-2.0"}) {
+			t.Fatalf("license change = %+v", change)
 		}
 	})
 
