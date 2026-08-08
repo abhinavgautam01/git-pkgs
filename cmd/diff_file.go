@@ -107,6 +107,7 @@ func sortedUniqueLicenses(licenses []string) []string {
 	result := make([]string, 0, len(licenses))
 	seen := make(map[string]bool, len(licenses))
 	for _, license := range licenses {
+		license = normalizeLicenseString(license)
 		if license == "" || seen[license] {
 			continue
 		}

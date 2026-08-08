@@ -954,6 +954,35 @@ func TestDiffFileCommand(t *testing.T) {
 		}
 	})
 
+	t.Run("ignores equivalent license spellings", func(t *testing.T) {
+		repoDir := createTestRepo(t)
+
+		cleanup := chdir(t, repoDir)
+		defer cleanup()
+
+		writeFile(t, repoDir, "old.json", `{"license":"MIT"}`)
+		writeFile(t, repoDir, "new.json", `{"license":" MIT License "}`)
+
+		var stdout bytes.Buffer
+		rootCmd := cmd.NewRootCmd()
+		rootCmd.SetArgs([]string{"diff-file", "old.json", "new.json", "--filename", "package.json", "--format", "json"})
+		rootCmd.SetOut(&stdout)
+
+		if err := rootCmd.Execute(); err != nil {
+			t.Fatalf("diff-file failed: %v", err)
+		}
+
+		var result struct {
+			LicenseChanges []json.RawMessage `json:"license_changes"`
+		}
+		if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+			t.Fatalf("decoding diff-file JSON: %v\n%s", err, stdout.String())
+		}
+		if len(result.LicenseChanges) != 0 {
+			t.Fatalf("license changes = %s, want none", result.LicenseChanges)
+		}
+	})
+
 	t.Run("compares workflow files with filename flag", func(t *testing.T) {
 		repoDir := createTestRepo(t)
 
