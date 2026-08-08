@@ -565,5 +565,9 @@ func formatDeclaredLicenses(licenses []string) string {
 	if len(licenses) == 0 {
 		return "(none)"
 	}
-	return strings.Join(licenses, ", ")
+	sanitized := make([]string, len(licenses))
+	for i, license := range licenses {
+		sanitized[i] = Sanitize(license)
+	}
+	return strings.Join(sanitized, ", ")
 }

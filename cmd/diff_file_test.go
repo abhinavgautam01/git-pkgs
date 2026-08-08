@@ -21,3 +21,11 @@ func TestSortedUniqueLicenses(t *testing.T) {
 		t.Fatalf("sortedUniqueLicenses() = %q, want %q", got, want)
 	}
 }
+
+func TestFormatDeclaredLicensesSanitizesControlCharacters(t *testing.T) {
+	got := formatDeclaredLicenses([]string{"MIT\x1b[31m", "Custom\x00License"})
+	want := "MIT[31m, CustomLicense"
+	if got != want {
+		t.Fatalf("formatDeclaredLicenses() = %q, want %q", got, want)
+	}
+}
