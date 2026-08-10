@@ -41,9 +41,10 @@ const (
 )
 
 type DiffResult struct {
-	Added    []DiffEntry `json:"added,omitempty"`
-	Modified []DiffEntry `json:"modified,omitempty"`
-	Removed  []DiffEntry `json:"removed,omitempty"`
+	Added          []DiffEntry             `json:"added,omitempty"`
+	Modified       []DiffEntry             `json:"modified,omitempty"`
+	Removed        []DiffEntry             `json:"removed,omitempty"`
+	LicenseChanges []DeclaredLicenseChange `json:"license_changes,omitempty"`
 }
 
 type DiffEntry struct {
@@ -54,6 +55,12 @@ type DiffEntry struct {
 	DependencyType  string `json:"dependency_type,omitempty"`
 	FromRequirement string `json:"from_requirement,omitempty"`
 	ToRequirement   string `json:"to_requirement,omitempty"`
+}
+
+type DeclaredLicenseChange struct {
+	ManifestPath string   `json:"manifest_path"`
+	FromLicenses []string `json:"from_licenses"`
+	ToLicenses   []string `json:"to_licenses"`
 }
 
 type DiffStat struct {
@@ -539,5 +546,28 @@ func outputDiffText(cmd *cobra.Command, result *DiffResult) error {
 		_, _ = fmt.Fprintln(cmd.OutOrStdout())
 	}
 
+	if len(result.LicenseChanges) > 0 {
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), Bold("Declared licenses:"))
+		for _, change := range result.LicenseChanges {
+			line := fmt.Sprintf("  %s %s -> %s", Yellow("~"),
+				formatDeclaredLicenses(change.FromLicenses),
+				formatDeclaredLicenses(change.ToLicenses))
+			line += fmt.Sprintf(" %s", Dim("("+change.ManifestPath+")"))
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), line)
+		}
+		_, _ = fmt.Fprintln(cmd.OutOrStdout())
+	}
+
 	return nil
+}
+
+func formatDeclaredLicenses(licenses []string) string {
+	if len(licenses) == 0 {
+		return "(none)"
+	}
+	sanitized := make([]string, len(licenses))
+	for i, license := range licenses {
+		sanitized[i] = Sanitize(license)
+	}
+	return strings.Join(sanitized, ", ")
 }

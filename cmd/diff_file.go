@@ -3,6 +3,8 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 
 	"github.com/git-pkgs/git-pkgs/internal/database"
 	"github.com/git-pkgs/manifests"
@@ -12,7 +14,7 @@ import (
 func addDiffFileCmd(parent *cobra.Command) {
 	diffFileCmd := &cobra.Command{
 		Use:   "diff-file [from] [to]",
-		Short: "Compare dependencies between two files",
+		Short: "Compare dependencies and declared licenses between two files",
 		Args:  cobra.ExactArgs(2),
 		RunE:  runDiffFile,
 	}
@@ -29,16 +31,25 @@ func runDiffFile(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	fromDeps, err := parseFile(args[0], defaultFilename)
+	fromFile, err := parseFile(args[0], defaultFilename)
 	if err != nil {
 		return err
 	}
-	toDeps, err := parseFile(args[1], defaultFilename)
+	toFile, err := parseFile(args[1], defaultFilename)
 	if err != nil {
 		return err
 	}
 
-	result := computeDiff(fromDeps, toDeps)
+	result := computeDiff(fromFile.Dependencies, toFile.Dependencies)
+	fromLicenses := sortedUniqueLicenses(fromFile.Licenses)
+	toLicenses := sortedUniqueLicenses(toFile.Licenses)
+	if !slices.Equal(fromLicenses, toLicenses) {
+		result.LicenseChanges = []DeclaredLicenseChange{{
+			ManifestPath: toFile.ManifestPath,
+			FromLicenses: fromLicenses,
+			ToLicenses:   toLicenses,
+		}}
+	}
 
 	switch format {
 	case formatJSON:
@@ -48,24 +59,31 @@ func runDiffFile(cmd *cobra.Command, args []string) error {
 	}
 }
 
-func parseFile(filename, defaultFilename string) ([]database.Dependency, error) {
-	data, err := os.ReadFile(filename)
-	if err != nil {
-		return nil, err
-	}
-	if len(data) == 0 {
-		return []database.Dependency{}, nil
-	}
+type parsedDiffFile struct {
+	Dependencies []database.Dependency
+	Licenses     []string
+	ManifestPath string
+}
 
-	// Use defaultFilename as-is if provided (preserves path for manifest identification)
-	// Otherwise use base name of the actual file
+func parseFile(filename, defaultFilename string) (parsedDiffFile, error) {
 	name := defaultFilename
 	if name == "" {
 		name = filepath.Base(filename)
 	}
+
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return parsedDiffFile{}, err
+	}
+	if len(data) == 0 {
+		return parsedDiffFile{ManifestPath: name}, nil
+	}
+
+	// Use defaultFilename as-is if provided (preserves path for manifest identification)
+	// Otherwise use base name of the actual file
 	result, err := manifests.Parse(name, data)
 	if err != nil {
-		return nil, err
+		return parsedDiffFile{}, err
 	}
 
 	var deps []database.Dependency
@@ -78,5 +96,24 @@ func parseFile(filename, defaultFilename string) ([]database.Dependency, error) 
 			DependencyType: string(dep.Scope),
 		})
 	}
-	return deps, nil
+	return parsedDiffFile{
+		Dependencies: deps,
+		Licenses:     result.Licenses,
+		ManifestPath: name,
+	}, nil
+}
+
+func sortedUniqueLicenses(licenses []string) []string {
+	result := make([]string, 0, len(licenses))
+	seen := make(map[string]bool, len(licenses))
+	for _, license := range licenses {
+		license = normalizeLicenseString(license)
+		if license == "" || seen[license] {
+			continue
+		}
+		seen[license] = true
+		result = append(result, license)
+	}
+	sort.Strings(result)
+	return result
 }

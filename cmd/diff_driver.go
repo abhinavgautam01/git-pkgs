@@ -192,7 +192,7 @@ func convertLockfile(cmd *cobra.Command, filePath string) error {
 	// Try to parse with manifests library
 	// Use filePath as-is to preserve path info for manifest identification (e.g., .github/workflows/)
 	result, err := manifests.Parse(filePath, content)
-	if err != nil || result == nil || len(result.Dependencies) == 0 {
+	if err != nil || result == nil {
 		// Fall back to just outputting the file as-is
 		_, _ = cmd.OutOrStdout().Write(content)
 		return nil
@@ -212,6 +212,9 @@ func convertLockfile(cmd *cobra.Command, filePath string) error {
 
 	// Output sorted list
 	w := bufio.NewWriter(cmd.OutOrStdout())
+	for _, license := range sortedUniqueLicenses(result.Licenses) {
+		_, _ = fmt.Fprintf(w, "license: %s\n", Sanitize(license))
+	}
 	for _, dep := range deps {
 		line := dep.Name
 		if dep.Version != "" {

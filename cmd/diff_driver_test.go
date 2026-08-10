@@ -118,3 +118,47 @@ BUNDLED WITH
 		}
 	})
 }
+
+func TestDiffDriverEmitsDeclaredLicenses(t *testing.T) {
+	content := `{"name":"example","license":"MIT"}`
+	tmpDir := t.TempDir()
+	manifestPath := filepath.Join(tmpDir, "package.json")
+	if err := os.WriteFile(manifestPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	rootCmd := cmd.NewRootCmd()
+	rootCmd.SetArgs([]string{"diff-driver", manifestPath})
+	rootCmd.SetOut(&stdout)
+
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("diff-driver failed: %v", err)
+	}
+
+	if got, want := strings.TrimSpace(stdout.String()), "license: MIT"; got != want {
+		t.Fatalf("diff-driver output = %q, want %q", got, want)
+	}
+}
+
+func TestDiffDriverEmitsNoRawContentAfterLicenseRemoval(t *testing.T) {
+	content := `{"name":"example"}`
+	tmpDir := t.TempDir()
+	manifestPath := filepath.Join(tmpDir, "package.json")
+	if err := os.WriteFile(manifestPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	rootCmd := cmd.NewRootCmd()
+	rootCmd.SetArgs([]string{"diff-driver", manifestPath})
+	rootCmd.SetOut(&stdout)
+
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("diff-driver failed: %v", err)
+	}
+
+	if stdout.Len() != 0 {
+		t.Fatalf("diff-driver output = %q, want empty semantic output", stdout.String())
+	}
+}

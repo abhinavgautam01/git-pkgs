@@ -515,7 +515,7 @@ git pkgs diff-file before.lock after.lock --filename=Gemfile.lock  # override ty
 git pkgs diff-file old.lock new.lock -f json  # JSON output
 ```
 
-Useful for comparing dependencies across different projects, archived source code without git history, or repositories using other version control systems.
+Useful for comparing dependencies across different projects, archived source code without git history, or repositories using other version control systems. For package manifests, it also reports changes to the project's declared licenses.
 
 ### Show changes in a commit
 
