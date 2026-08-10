@@ -1,25 +1,17 @@
 package cmd
 
 import (
-	"bytes"
-	"crypto/sha256"
-	"encoding/json"
-	"encoding/xml"
 	"errors"
 	"fmt"
-	"io"
 	"path"
 	"sort"
 	"strings"
 
 	"github.com/git-pkgs/git-pkgs/internal/git"
 	"github.com/git-pkgs/manifests"
-	"github.com/git-pkgs/sbom"
 	"github.com/git-pkgs/spdx"
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
-
-const spdxRootPackageID = "SPDXRef-Package-root"
 
 type projectLicenses struct {
 	Expression string
@@ -32,87 +24,100 @@ type projectLicenseFile struct {
 	Text string
 }
 
-func (l projectLicenses) empty() bool {
-	return l.Expression == "" && len(l.Names) == 0 && len(l.Files) == 0
-}
-
-func projectLicensesAtRevision(repo *git.Repository, revision string) (projectLicenses, error) {
+func projectLicensesAtRevision(repo *git.Repository, revision string) (projectLicenses, []string, error) {
 	if revision == "" {
 		revision = "HEAD"
 	}
 
 	hash, err := repo.ResolveRevision(revision)
 	if err != nil {
-		return projectLicenses{}, fmt.Errorf("resolving %q: %w", revision, err)
+		return projectLicenses{}, nil, fmt.Errorf("resolving %q: %w", revision, err)
 	}
 	commit, err := repo.CommitObject(*hash)
 	if err != nil {
-		return projectLicenses{}, fmt.Errorf("getting commit: %w", err)
+		return projectLicenses{}, nil, fmt.Errorf("getting commit: %w", err)
 	}
 	tree, err := commit.Tree()
 	if err != nil {
-		return projectLicenses{}, fmt.Errorf("getting commit tree: %w", err)
+		return projectLicenses{}, nil, fmt.Errorf("getting commit tree: %w", err)
 	}
 
 	var declaredLicenses []string
+	var warnings []string
 	declaredFiles := make(map[string]string)
-	err = tree.Files().ForEach(func(file *object.File) error {
-		if path.Dir(file.Name) != "." {
-			return nil
+	for i := range tree.Entries {
+		entry := &tree.Entries[i]
+		if !entry.Mode.IsFile() {
+			continue
+		}
+		file, err := tree.TreeEntryFile(entry)
+		if err != nil {
+			return projectLicenses{}, nil, fmt.Errorf("reading %s: %w", entry.Name, err)
 		}
 		_, kind, ok := manifests.Identify(file.Name)
 		if !ok || kind != manifests.Manifest {
-			return nil
+			continue
 		}
 
 		content, err := file.Contents()
 		if err != nil {
-			return fmt.Errorf("reading %s: %w", file.Name, err)
+			return projectLicenses{}, nil, fmt.Errorf("reading %s: %w", file.Name, err)
 		}
 		result, err := manifests.Parse(file.Name, []byte(content))
 		if err != nil {
-			return nil
+			continue
 		}
 		declaredLicenses = append(declaredLicenses, result.Licenses...)
 		if result.LicenseFile != "" {
-			licenseFile, err := readProjectLicenseFile(tree, file.Name, result.LicenseFile)
+			licenseFile, warning, err := readProjectLicenseFile(tree, file.Name, result.LicenseFile)
 			if err != nil {
-				return err
+				return projectLicenses{}, nil, err
+			}
+			if warning != "" {
+				warnings = append(warnings, warning)
+				continue
 			}
 			declaredFiles[licenseFile.Path] = licenseFile.Text
 		}
-		return nil
-	})
-	if err != nil {
-		return projectLicenses{}, err
 	}
 	licenses := normalizeProjectLicenses(declaredLicenses)
 	licenses.Files = sortedProjectLicenseFiles(declaredFiles)
-	return licenses, nil
+	return licenses, warnings, nil
 }
 
 func readProjectLicenseFile(
 	tree *object.Tree,
 	manifestPath, declaredPath string,
-) (projectLicenseFile, error) {
+) (projectLicenseFile, string, error) {
 	declaredPath = strings.TrimSpace(declaredPath)
 	resolvedPath := path.Clean(path.Join(path.Dir(manifestPath), declaredPath))
 	if declaredPath == "" || path.IsAbs(declaredPath) || resolvedPath == ".." || strings.HasPrefix(resolvedPath, "../") {
-		return projectLicenseFile{}, fmt.Errorf("invalid license file path %q in %s", declaredPath, manifestPath)
+		return projectLicenseFile{}, "", fmt.Errorf("invalid license file path %q in %s", declaredPath, manifestPath)
 	}
 
 	file, err := tree.File(resolvedPath)
 	if err != nil {
-		return projectLicenseFile{}, fmt.Errorf("reading license file %s declared by %s: %w", resolvedPath, manifestPath, err)
+		if errors.Is(err, object.ErrFileNotFound) {
+			return projectLicenseFile{}, fmt.Sprintf(
+				"license file %s declared by %s was not found", resolvedPath, manifestPath,
+			), nil
+		}
+		return projectLicenseFile{}, "", fmt.Errorf(
+			"reading license file %s declared by %s: %w", resolvedPath, manifestPath, err,
+		)
 	}
 	content, err := file.Contents()
 	if err != nil {
-		return projectLicenseFile{}, fmt.Errorf("reading license file %s declared by %s: %w", resolvedPath, manifestPath, err)
+		return projectLicenseFile{}, "", fmt.Errorf(
+			"reading license file %s declared by %s: %w", resolvedPath, manifestPath, err,
+		)
 	}
 	if strings.TrimSpace(content) == "" {
-		return projectLicenseFile{}, fmt.Errorf("license file %s declared by %s is empty", resolvedPath, manifestPath)
+		return projectLicenseFile{}, fmt.Sprintf(
+			"license file %s declared by %s is empty", resolvedPath, manifestPath,
+		), nil
 	}
-	return projectLicenseFile{Path: resolvedPath, Text: content}, nil
+	return projectLicenseFile{Path: resolvedPath, Text: content}, "", nil
 }
 
 func sortedProjectLicenseFiles(files map[string]string) []projectLicenseFile {
@@ -178,318 +183,9 @@ func joinSPDXExpressions(expressions []string) string {
 			expressions[i] = "(" + expression + ")"
 		}
 	}
-	joined, err := spdx.NormalizeExpression(strings.Join(expressions, " OR "))
+	joined, err := spdx.NormalizeExpression(strings.Join(expressions, " AND "))
 	if err != nil {
 		return ""
 	}
 	return joined
-}
-
-func encodeSBOMWithRootLicenses(
-	w io.Writer,
-	document *sbom.SBOM,
-	format sbom.Format,
-	licenses projectLicenses,
-) error {
-	if licenses.empty() {
-		return sbom.Encode(w, document, format)
-	}
-
-	var encoded bytes.Buffer
-	if err := sbom.Encode(&encoded, document, format); err != nil {
-		return err
-	}
-
-	switch format {
-	case sbom.FormatCycloneDXJSON, sbom.FormatSPDXJSON:
-		data, err := addRootLicensesJSON(encoded.Bytes(), format, licenses)
-		if err != nil {
-			return err
-		}
-		_, err = w.Write(data)
-		return err
-	case sbom.FormatCycloneDXXML:
-		return addCycloneDXRootLicensesXML(w, encoded.Bytes(), licenses)
-	default:
-		return fmt.Errorf("unsupported SBOM format %d", format)
-	}
-}
-
-func addRootLicensesJSON(data []byte, format sbom.Format, licenses projectLicenses) ([]byte, error) {
-	var document map[string]any
-	if err := json.Unmarshal(data, &document); err != nil {
-		return nil, fmt.Errorf("decoding generated SBOM: %w", err)
-	}
-	if document["components"] == nil {
-		delete(document, "components")
-	}
-
-	switch format {
-	case sbom.FormatCycloneDXJSON:
-		metadata, ok := document["metadata"].(map[string]any)
-		if !ok {
-			return nil, errors.New("generated CycloneDX SBOM has no metadata")
-		}
-		component, ok := metadata["component"].(map[string]any)
-		if !ok {
-			return nil, errors.New("generated CycloneDX SBOM has no root component")
-		}
-		component["licenses"] = cycloneDXLicenseChoices(licenses)
-	case sbom.FormatSPDXJSON:
-		packages, ok := document["packages"].([]any)
-		if !ok {
-			return nil, errors.New("generated SPDX SBOM has no packages")
-		}
-		found := false
-		for _, value := range packages {
-			pkg, ok := value.(map[string]any)
-			if ok && pkg["SPDXID"] == spdxRootPackageID {
-				pkg["licenseDeclared"] = licenses.spdxExpression()
-				found = true
-				break
-			}
-		}
-		if !found {
-			return nil, errors.New("generated SPDX SBOM has no root package")
-		}
-		if len(licenses.Names) > 0 || len(licenses.Files) > 0 {
-			document["hasExtractedLicensingInfos"] = extractedLicenseInfo(licenses)
-		}
-	default:
-		return nil, fmt.Errorf("unsupported JSON SBOM format %d", format)
-	}
-
-	encoded, err := json.MarshalIndent(document, "", "  ")
-	if err != nil {
-		return nil, fmt.Errorf("encoding generated SBOM: %w", err)
-	}
-	return append(encoded, '\n'), nil
-}
-
-func cycloneDXLicenseChoices(licenses projectLicenses) []any {
-	if licenses.Expression != "" && len(licenses.Names) == 0 && len(licenses.Files) == 0 {
-		return []any{map[string]any{"expression": licenses.Expression}}
-	}
-
-	choices := make([]any, 0, 1+len(licenses.Names)+len(licenses.Files))
-	if licenses.Expression != "" {
-		license := map[string]any{"name": licenses.Expression}
-		if spdx.ValidLicense(licenses.Expression) {
-			license = map[string]any{"id": licenses.Expression}
-		}
-		choices = append(choices, map[string]any{"license": license})
-	}
-	for _, name := range licenses.Names {
-		choices = append(choices, map[string]any{"license": map[string]any{"name": name}})
-	}
-	for _, file := range licenses.Files {
-		choices = append(choices, map[string]any{"license": map[string]any{"name": file.Path}})
-	}
-	return choices
-}
-
-func (l projectLicenses) usesCycloneDXExpression() bool {
-	return l.Expression != "" && len(l.Names) == 0 && len(l.Files) == 0
-}
-
-func (l projectLicenses) spdxExpression() string {
-	parts := make([]string, 0, 1+len(l.Names)+len(l.Files))
-	if l.Expression != "" {
-		parts = append(parts, l.Expression)
-	}
-	for _, name := range l.Names {
-		parts = append(parts, licenseRefForName(name))
-	}
-	for _, file := range l.Files {
-		parts = append(parts, licenseRefForFile(file))
-	}
-	return joinSPDXExpressions(parts)
-}
-
-func licenseRefForName(name string) string {
-	digest := sha256.Sum256([]byte(name))
-	return fmt.Sprintf("LicenseRef-Manifest-%x", digest[:8])
-}
-
-func licenseRefForFile(file projectLicenseFile) string {
-	digest := sha256.Sum256([]byte(file.Path + "\x00" + file.Text))
-	return fmt.Sprintf("LicenseRef-Manifest-%x", digest[:8])
-}
-
-func extractedLicenseInfo(licenses projectLicenses) []any {
-	infos := make([]any, 0, len(licenses.Names)+len(licenses.Files))
-	for _, name := range licenses.Names {
-		infos = append(infos, map[string]any{
-			"licenseId":     licenseRefForName(name),
-			"name":          name,
-			"extractedText": name,
-		})
-	}
-	for _, file := range licenses.Files {
-		infos = append(infos, map[string]any{
-			"licenseId":     licenseRefForFile(file),
-			"name":          file.Path,
-			"extractedText": file.Text,
-		})
-	}
-	return infos
-}
-
-func addCycloneDXRootLicensesXML(w io.Writer, data []byte, licenses projectLicenses) error {
-	decoder := xml.NewDecoder(bytes.NewReader(data))
-	encoder := xml.NewEncoder(w)
-	metadataDepth := -1
-	componentDepth := -1
-	skipDepth := -1
-	depth := 0
-	found := false
-	var pendingToken xml.Token
-
-	for {
-		var token xml.Token
-		var err error
-		if pendingToken != nil {
-			token = pendingToken
-			pendingToken = nil
-		} else {
-			token, err = decoder.Token()
-		}
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("decoding generated CycloneDX XML: %w", err)
-		}
-		if skipDepth != -1 {
-			switch token.(type) {
-			case xml.StartElement:
-				depth++
-			case xml.EndElement:
-				if depth == skipDepth {
-					skipDepth = -1
-				}
-				depth--
-			}
-			continue
-		}
-
-		switch element := token.(type) {
-		case xml.StartElement:
-			if isCycloneDXOptionalContainer(element.Name.Local) {
-				next, nextErr := decoder.Token()
-				if nextErr != nil {
-					return fmt.Errorf("decoding generated CycloneDX XML: %w", nextErr)
-				}
-				if end, ok := next.(xml.EndElement); ok && end.Name == element.Name {
-					continue
-				}
-				pendingToken = next
-			}
-			depth++
-			if element.Name.Local == "metadata" && metadataDepth == -1 {
-				metadataDepth = depth
-			} else if element.Name.Local == "component" && depth == metadataDepth+1 {
-				componentDepth = depth
-			} else if element.Name.Local == "licenses" && componentDepth != -1 && depth == componentDepth+1 {
-				skipDepth = depth
-				continue
-			}
-			element.Name.Space = ""
-			token = element
-		case xml.EndElement:
-			if element.Name.Local == "component" && depth == componentDepth {
-				if err := encodeCycloneDXLicensesXML(encoder, licenses); err != nil {
-					return err
-				}
-				found = true
-				componentDepth = -1
-			}
-			element.Name.Space = ""
-			token = element
-		}
-
-		if err := encoder.EncodeToken(token); err != nil {
-			return fmt.Errorf("encoding CycloneDX XML: %w", err)
-		}
-		if _, ok := token.(xml.EndElement); ok {
-			if depth == metadataDepth {
-				metadataDepth = -1
-			}
-			depth--
-		}
-	}
-	if !found {
-		return errors.New("generated CycloneDX SBOM has no root component")
-	}
-	if err := encoder.Flush(); err != nil {
-		return fmt.Errorf("encoding CycloneDX XML: %w", err)
-	}
-	return nil
-}
-
-func isCycloneDXOptionalContainer(name string) bool {
-	switch name {
-	case "components", "dependencies", "externalReferences", "hashes", "properties":
-		return true
-	default:
-		return false
-	}
-}
-
-func encodeCycloneDXLicensesXML(encoder *xml.Encoder, licenses projectLicenses) error {
-	licensesElement := xml.StartElement{Name: xml.Name{Local: "licenses"}}
-	if err := encoder.EncodeToken(licensesElement); err != nil {
-		return fmt.Errorf("encoding CycloneDX root licenses: %w", err)
-	}
-	if licenses.usesCycloneDXExpression() {
-		if err := encodeXMLElement(encoder, "expression", licenses.Expression); err != nil {
-			return err
-		}
-	} else {
-		if licenses.Expression != "" {
-			if spdx.ValidLicense(licenses.Expression) {
-				if err := encodeCycloneDXLicenseXML(encoder, "id", licenses.Expression); err != nil {
-					return err
-				}
-			} else if err := encodeCycloneDXLicenseXML(encoder, "name", licenses.Expression); err != nil {
-				return err
-			}
-		}
-		for _, name := range licenses.Names {
-			if err := encodeCycloneDXLicenseXML(encoder, "name", name); err != nil {
-				return err
-			}
-		}
-		for _, file := range licenses.Files {
-			if err := encodeCycloneDXLicenseXML(encoder, "name", file.Path); err != nil {
-				return err
-			}
-		}
-	}
-	if err := encoder.EncodeToken(licensesElement.End()); err != nil {
-		return fmt.Errorf("encoding CycloneDX root licenses: %w", err)
-	}
-	return nil
-}
-
-func encodeCycloneDXLicenseXML(encoder *xml.Encoder, field, value string) error {
-	licenseElement := xml.StartElement{Name: xml.Name{Local: "license"}}
-	if err := encoder.EncodeToken(licenseElement); err != nil {
-		return fmt.Errorf("encoding CycloneDX root licenses: %w", err)
-	}
-	if err := encodeXMLElement(encoder, field, value); err != nil {
-		return err
-	}
-	if err := encoder.EncodeToken(licenseElement.End()); err != nil {
-		return fmt.Errorf("encoding CycloneDX root licenses: %w", err)
-	}
-	return nil
-}
-
-func encodeXMLElement(encoder *xml.Encoder, name, value string) error {
-	element := xml.StartElement{Name: xml.Name{Local: name}}
-	if err := encoder.EncodeElement(value, element); err != nil {
-		return fmt.Errorf("encoding CycloneDX root licenses: %w", err)
-	}
-	return nil
 }

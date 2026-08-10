@@ -88,13 +88,16 @@ func runSBOM(cmd *cobra.Command, args []string) error {
 		projectName = "project"
 	}
 
-	projectLicenses, err := projectLicensesAtRevision(repo, commit)
+	projectLicenses, licenseWarnings, err := projectLicensesAtRevision(repo, commit)
 	if err != nil {
 		return fmt.Errorf("loading project licenses: %w", err)
 	}
+	for _, warning := range licenseWarnings {
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Warning: %s\n", warning)
+	}
 
-	doc := buildSBOM(deps, licenseMap, projectName, projectVersion)
-	return encodeSBOMWithRootLicenses(cmd.OutOrStdout(), doc, out, projectLicenses)
+	doc := buildSBOM(deps, licenseMap, projectName, projectVersion, projectLicenses)
+	return sbom.Encode(cmd.OutOrStdout(), doc, out)
 }
 
 func sbomFormat(sbomType, format string) (sbom.Format, error) {
@@ -110,13 +113,32 @@ func sbomFormat(sbomType, format string) (sbom.Format, error) {
 	}
 }
 
-func buildSBOM(deps []database.Dependency, licenses map[string]string, name, ver string) *sbom.SBOM {
+func buildSBOM(
+	deps []database.Dependency,
+	licenses map[string]string,
+	name, ver string,
+	projectLicenseData projectLicenses,
+) *sbom.SBOM {
 	s := sbom.New(sbom.TypeCycloneDX)
+	extractedLicenses := make([]sbom.ExtractedLicense, 0, len(projectLicenseData.Files))
+	for _, file := range projectLicenseData.Files {
+		extractedLicenses = append(extractedLicenses, sbom.ExtractedLicense{
+			Name: file.Path,
+			Text: file.Text,
+		})
+	}
 	s.Document = sbom.Document{
 		Name:      name,
 		Namespace: "https://git-pkgs.example.com/" + name,
-		Component: sbom.Component{Type: "application", Name: name, Version: ver},
-		Creators:  []sbom.Creator{{Type: "Tool", Name: "git-pkgs-" + version}},
+		Component: sbom.Component{
+			Type:              "application",
+			Name:              name,
+			Version:           ver,
+			LicenseExpression: projectLicenseData.Expression,
+			LicenseNames:      projectLicenseData.Names,
+			ExtractedLicenses: extractedLicenses,
+		},
+		Creators: []sbom.Creator{{Type: "Tool", Name: "git-pkgs-" + version}},
 	}
 	for _, d := range deps {
 		purlStr := sbomPURLForDependency(d)
