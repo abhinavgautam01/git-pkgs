@@ -201,6 +201,21 @@ func (idx *Indexer) Run() (*Result, error) {
 			writer.AddCommit(commitInfo, hasChanges)
 			result.CommitsAnalyzed++
 
+			if analysisResult != nil {
+				for _, license := range analysisResult.ManifestLicenses {
+					manifest := database.ManifestInfo{
+						Path:      license.ManifestPath,
+						Ecosystem: license.Ecosystem,
+						Kind:      license.Kind,
+					}
+					writer.AddManifestLicense(sha, manifest, database.ManifestLicenseInfo{
+						Licenses:    license.Licenses,
+						LicenseFile: license.LicenseFile,
+						Removed:     license.Removed,
+					})
+				}
+			}
+
 			if hasChanges {
 				result.CommitsWithChanges++
 				result.TotalChanges += len(analysisResult.Changes)

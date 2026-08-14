@@ -69,6 +69,7 @@ func TestCreate(t *testing.T) {
 			"commits",
 			"branch_commits",
 			"manifests",
+			"manifest_licenses",
 			"dependency_changes",
 			"dependency_snapshots",
 			"packages",
