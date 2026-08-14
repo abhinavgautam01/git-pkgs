@@ -243,8 +243,8 @@ github.com/git-pkgs/resolve v0.2.2 h1:jjr6qa/8b/edg3tub5WYyYV04OpfWCuGZzgVYnfGl3
 github.com/git-pkgs/resolve v0.2.2/go.mod h1:KT894HOGMudjhSUWGHW1mC4r01eBaVaf0ujYhEHPMvo=
 github.com/git-pkgs/sarif v0.1.1 h1:Jc5N+6ezJqbVjGZlPX9i8ar+OUsT+LX06nsM6Xjrq1c=
 github.com/git-pkgs/sarif v0.1.1/go.mod h1:NGg7Ft2+nvR0CBo+Ya9oSX+Yh/p1d7FVyhPe2/0v9V4=
-github.com/git-pkgs/sbom v0.1.3 h1:HNZabAgUSu4qel9tVtAedZTjMmml2JRaFYNuipBCGjs=
-github.com/git-pkgs/sbom v0.1.3/go.mod h1:42YiJ+W9jBsPZnYJQs6tUlOtWlC0vDBOtND8TMwE8ek=
+github.com/git-pkgs/sbom v0.1.4 h1:bcWiNIg0l8selcAcUh/ipX2pU9RITcwfi1vDbI5uvS4=
+github.com/git-pkgs/sbom v0.1.4/go.mod h1:42YiJ+W9jBsPZnYJQs6tUlOtWlC0vDBOtND8TMwE8ek=
 github.com/git-pkgs/spdx v0.3.0 h1:AN0guJE7vN5gbOMi9We4j1ziS4cwgFVhTvjVDGfaC7Q=
 github.com/git-pkgs/spdx v0.3.0/go.mod h1:cqRoZcvl530s/W+oGNvwjt4ODN8T1W6D/20MUZEFdto=
 github.com/git-pkgs/vers v0.3.0 h1:xM4LLUCRmqzdDfe+/pVQUx4SRyFXRVth6tOsJ14wMKU=

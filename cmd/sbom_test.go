@@ -3,12 +3,23 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"encoding/xml"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/git-pkgs/enrichment"
 	"github.com/git-pkgs/git-pkgs/internal/database"
+	gitpkg "github.com/git-pkgs/git-pkgs/internal/git"
 	"github.com/git-pkgs/sbom"
+	"github.com/git-pkgs/spdx"
+	gitgo "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
 type sbomEnrichmentClient struct {
@@ -54,7 +65,7 @@ func TestBuildSBOM(t *testing.T) {
 	}
 	licenses := map[string]string{"pkg:npm/lodash@4.17.21": "MIT"}
 
-	doc := buildSBOM(deps, licenses, "demo", "1.0.0")
+	doc := buildSBOM(deps, licenses, "demo", "1.0.0", projectLicenses{})
 
 	if len(doc.Packages) != 2 {
 		t.Fatalf("Packages = %d, want 2", len(doc.Packages))
@@ -87,6 +98,333 @@ func TestBuildSBOM(t *testing.T) {
 			t.Errorf("encoded output missing purl:\n%s", buf.String())
 		}
 	}
+}
+
+func TestProjectLicenseAtRevision(t *testing.T) {
+	repoDir := t.TempDir()
+	repository, err := gitgo.PlainInit(repoDir, false)
+	if err != nil {
+		t.Fatalf("PlainInit: %v", err)
+	}
+
+	first := commitSBOMFile(t, repository, repoDir, "package.json", `{
+  "name": "demo",
+  "version": "1.0.0",
+  "license": "MIT"
+}`, "add package manifest")
+	commitSBOMFile(t, repository, repoDir, "package.json", `{
+  "name": "demo",
+  "version": "1.1.0",
+  "license": "Apache-2.0"
+}`, "change project license")
+	commitSBOMFile(t, repository, repoDir, "packages/nested/package.json", `{
+  "name": "nested",
+  "version": "1.0.0",
+  "license": "GPL-3.0-only"
+}`, "add nested package")
+
+	repo, err := gitpkg.OpenRepository(repoDir)
+	if err != nil {
+		t.Fatalf("OpenRepository: %v", err)
+	}
+
+	got, warnings, err := projectLicensesAtRevision(repo, first.String())
+	if err != nil {
+		t.Fatalf("projectLicensesAtRevision(first): %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("first revision warnings = %q", warnings)
+	}
+	if got.Expression != "MIT" || len(got.Names) != 0 {
+		t.Fatalf("first revision licenses = %+v, want MIT", got)
+	}
+
+	got, warnings, err = projectLicensesAtRevision(repo, "HEAD")
+	if err != nil {
+		t.Fatalf("projectLicensesAtRevision(HEAD): %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("HEAD warnings = %q", warnings)
+	}
+	if got.Expression != "Apache-2.0" || len(got.Names) != 0 {
+		t.Fatalf("HEAD licenses = %+v, want Apache-2.0", got)
+	}
+}
+
+func TestNormalizeProjectLicensesSeparatesNonSPDXNames(t *testing.T) {
+	licenses := normalizeProjectLicenses([]string{
+		"BSD-3-Clause",
+		"License :: OSI Approved :: BSD License",
+		"Acme Internal Terms",
+	})
+
+	if licenses.Expression == "" || !spdx.Valid(licenses.Expression) {
+		t.Fatalf("normalized expression = %q, want valid SPDX", licenses.Expression)
+	}
+	if strings.Contains(licenses.Expression, "License ::") {
+		t.Fatalf("normalized expression contains raw classifier: %q", licenses.Expression)
+	}
+	if len(licenses.Names) != 1 || licenses.Names[0] != "Acme Internal Terms" {
+		t.Fatalf("non-SPDX names = %q, want [Acme Internal Terms]", licenses.Names)
+	}
+}
+
+func TestNormalizeProjectLicensesCombinesIndependentExpressions(t *testing.T) {
+	licenses := normalizeProjectLicenses([]string{
+		"MIT OR Apache-2.0",
+		"BSD-3-Clause",
+	})
+
+	if !spdx.Valid(licenses.Expression) {
+		t.Fatalf("normalized expression = %q, want valid SPDX", licenses.Expression)
+	}
+	if licenses.Expression != "BSD-3-Clause AND (MIT OR Apache-2.0)" {
+		t.Fatalf("normalized expression = %q, want independent declarations joined with AND "+
+			"and manifest-level OR preserved", licenses.Expression)
+	}
+}
+
+func TestProjectLicenseFileAtRevision(t *testing.T) {
+	repoDir := t.TempDir()
+	repository, err := gitgo.PlainInit(repoDir, false)
+	if err != nil {
+		t.Fatalf("PlainInit: %v", err)
+	}
+
+	commitSBOMFile(t, repository, repoDir, "LICENSE.custom", "original license terms\n", "add license file")
+	manifestRevision := commitSBOMFile(t, repository, repoDir, "Cargo.toml", `[package]
+name = "demo"
+version = "1.0.0"
+license-file = "LICENSE.custom"
+`, "add cargo manifest")
+	commitSBOMFile(t, repository, repoDir, "LICENSE.custom", "updated license terms\n", "update license file")
+
+	repo, err := gitpkg.OpenRepository(repoDir)
+	if err != nil {
+		t.Fatalf("OpenRepository: %v", err)
+	}
+
+	licenses, warnings, err := projectLicensesAtRevision(repo, manifestRevision.String())
+	if err != nil {
+		t.Fatalf("projectLicensesAtRevision: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %q", warnings)
+	}
+	if licenses.Expression != "" || len(licenses.Names) != 0 || len(licenses.Files) != 1 {
+		t.Fatalf("project licenses = %+v, want one declared file", licenses)
+	}
+	if file := licenses.Files[0]; file.Path != "LICENSE.custom" || file.Text != "original license terms\n" {
+		t.Fatalf("project license file = %+v, want original revision content", file)
+	}
+}
+
+func TestProjectLicenseFileMissingWarnsAndContinues(t *testing.T) {
+	repoDir := t.TempDir()
+	repository, err := gitgo.PlainInit(repoDir, false)
+	if err != nil {
+		t.Fatalf("PlainInit: %v", err)
+	}
+	commitSBOMFile(t, repository, repoDir, "Cargo.toml", `[package]
+name = "demo"
+version = "1.0.0"
+license-file = "LICENSE.missing"
+`, "add cargo manifest")
+
+	repo, err := gitpkg.OpenRepository(repoDir)
+	if err != nil {
+		t.Fatalf("OpenRepository: %v", err)
+	}
+	licenses, warnings, err := projectLicensesAtRevision(repo, "HEAD")
+	if err != nil {
+		t.Fatalf("projectLicensesAtRevision: %v", err)
+	}
+	if len(licenses.Files) != 0 {
+		t.Fatalf("project license files = %+v, want none", licenses.Files)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "LICENSE.missing") ||
+		!strings.Contains(warnings[0], "was not found") {
+		t.Fatalf("warnings = %q", warnings)
+	}
+}
+
+func TestProjectLicenseFileEmptyWarnsAndContinues(t *testing.T) {
+	repoDir := t.TempDir()
+	repository, err := gitgo.PlainInit(repoDir, false)
+	if err != nil {
+		t.Fatalf("PlainInit: %v", err)
+	}
+	commitSBOMFile(t, repository, repoDir, "LICENSE.custom", "\n", "add empty license file")
+	commitSBOMFile(t, repository, repoDir, "Cargo.toml", `[package]
+name = "demo"
+version = "1.0.0"
+license-file = "LICENSE.custom"
+`, "add cargo manifest")
+
+	repo, err := gitpkg.OpenRepository(repoDir)
+	if err != nil {
+		t.Fatalf("OpenRepository: %v", err)
+	}
+	licenses, warnings, err := projectLicensesAtRevision(repo, "HEAD")
+	if err != nil {
+		t.Fatalf("projectLicensesAtRevision: %v", err)
+	}
+	if len(licenses.Files) != 0 {
+		t.Fatalf("project license files = %+v, want none", licenses.Files)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "LICENSE.custom") ||
+		!strings.Contains(warnings[0], "is empty") {
+		t.Fatalf("warnings = %q", warnings)
+	}
+}
+
+func testRootLicenses() (*sbom.SBOM, projectLicenses) {
+	licenses := projectLicenses{
+		Expression: "MIT OR Apache-2.0",
+		Names:      []string{"Acme Internal Terms"},
+		Files: []projectLicenseFile{{
+			Path: "LICENSE.custom",
+			Text: "Custom file terms\n",
+		}},
+	}
+	document := buildSBOM(nil, nil, "demo", "1.0.0", licenses)
+	return document, licenses
+}
+
+func TestEncodeSBOMWithRootLicensesCycloneDXJSON(t *testing.T) {
+	document, licenses := testRootLicenses()
+	var output bytes.Buffer
+	if err := sbom.Encode(&output, document, sbom.FormatCycloneDXJSON); err != nil {
+		t.Fatalf("sbom.Encode: %v", err)
+	}
+	var result struct {
+		Metadata struct {
+			Component struct {
+				Licenses []struct {
+					Expression string `json:"expression"`
+					License    *struct {
+						ID   string `json:"id"`
+						Name string `json:"name"`
+					} `json:"license"`
+				} `json:"licenses"`
+			} `json:"component"`
+		} `json:"metadata"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+		t.Fatalf("Unmarshal: %v\n%s", err, output.String())
+	}
+	got := result.Metadata.Component.Licenses
+	if len(got) != 3 {
+		t.Fatalf("root licenses = %+v, want three license entries", got)
+	}
+	wantNames := []string{licenses.Expression, licenses.Names[0], licenses.Files[0].Path}
+	for i, choice := range got {
+		if choice.Expression != "" || choice.License == nil || choice.License.Name != wantNames[i] {
+			t.Fatalf("root license choice %d = %+v, want named license %q", i, choice, wantNames[i])
+		}
+	}
+}
+
+func TestEncodeSBOMWithRootLicensesCycloneDXXML(t *testing.T) {
+	document, licenses := testRootLicenses()
+	var output bytes.Buffer
+	if err := sbom.Encode(&output, document, sbom.FormatCycloneDXXML); err != nil {
+		t.Fatalf("sbom.Encode: %v", err)
+	}
+	var result struct {
+		Metadata struct {
+			Component struct {
+				LicenseExpression string   `xml:"licenses>expression"`
+				LicenseNames      []string `xml:"licenses>license>name"`
+			} `xml:"component"`
+		} `xml:"metadata"`
+	}
+	if err := xml.Unmarshal(output.Bytes(), &result); err != nil {
+		t.Fatalf("Unmarshal: %v\n%s", err, output.String())
+	}
+	component := result.Metadata.Component
+	wantNames := []string{licenses.Expression, licenses.Names[0], licenses.Files[0].Path}
+	if component.LicenseExpression != "" || !slices.Equal(component.LicenseNames, wantNames) {
+		t.Fatalf("root licenses = %+v, want named licenses %q", component, wantNames)
+	}
+}
+
+func TestEncodeSBOMWithRootLicensesSPDXJSON(t *testing.T) {
+	document, licenses := testRootLicenses()
+	var output bytes.Buffer
+	if err := sbom.Encode(&output, document, sbom.FormatSPDXJSON); err != nil {
+		t.Fatalf("sbom.Encode: %v", err)
+	}
+	var result struct {
+		Packages []struct {
+			SPDXID          string `json:"SPDXID"`
+			Name            string `json:"name"`
+			LicenseDeclared string `json:"licenseDeclared"`
+		} `json:"packages"`
+		ExtractedLicensingInfos []struct {
+			LicenseID     string `json:"licenseId"`
+			Name          string `json:"name"`
+			ExtractedText string `json:"extractedText"`
+		} `json:"hasExtractedLicensingInfos"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+		t.Fatalf("Unmarshal: %v\n%s", err, output.String())
+	}
+	rootLicense := findRootPackageLicense(result.Packages)
+	if !spdx.Valid(rootLicense) {
+		t.Fatalf("root license = %q, want valid SPDX expression with both LicenseRefs", rootLicense)
+	}
+	if len(result.ExtractedLicensingInfos) != 2 {
+		t.Fatalf("extracted licensing infos = %+v, want two", result.ExtractedLicensingInfos)
+	}
+	fileInfo := result.ExtractedLicensingInfos[1]
+	if fileInfo.Name != licenses.Files[0].Path || fileInfo.ExtractedText != licenses.Files[0].Text ||
+		!strings.Contains(rootLicense, fileInfo.LicenseID) {
+		t.Fatalf("file extracted licensing info = %+v", fileInfo)
+	}
+}
+
+func findRootPackageLicense(packages []struct {
+	SPDXID          string `json:"SPDXID"`
+	Name            string `json:"name"`
+	LicenseDeclared string `json:"licenseDeclared"`
+}) string {
+	for _, pkg := range packages {
+		if pkg.Name == "demo" {
+			return pkg.LicenseDeclared
+		}
+	}
+	return ""
+}
+
+func commitSBOMFile(
+	t *testing.T,
+	repository *gitgo.Repository,
+	repoDir, name, content, message string,
+) plumbing.Hash {
+	t.Helper()
+	fullPath := filepath.Join(repoDir, filepath.FromSlash(name))
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	worktree, err := repository.Worktree()
+	if err != nil {
+		t.Fatalf("Worktree: %v", err)
+	}
+	if _, err := worktree.Add(name); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	when := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	hash, err := worktree.Commit(message, &gitgo.CommitOptions{
+		Author: &object.Signature{Name: "Test User", Email: "test@example.com", When: when},
+	})
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	return hash
 }
 
 func TestSelectSBOMDependenciesPrefersResolvedVersions(t *testing.T) {
