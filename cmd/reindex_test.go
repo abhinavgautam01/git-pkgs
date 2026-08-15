@@ -2,8 +2,11 @@ package cmd_test
 
 import (
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/git-pkgs/git-pkgs/internal/database"
 )
 
 func TestReindex(t *testing.T) {
@@ -198,6 +201,47 @@ func TestReindex(t *testing.T) {
 
 		if !strings.Contains(err.Error(), "init") {
 			t.Errorf("expected error to mention init, got: %v", err)
+		}
+	})
+
+	t.Run("requires upgrade for an older schema", func(t *testing.T) {
+		repoDir := createTestRepo(t)
+		addFileAndCommit(t, repoDir, "package.json", `{"name":"example","license":"MIT"}`, "Initial commit")
+
+		cleanup := chdir(t, repoDir)
+		defer cleanup()
+
+		_, _, err := runCmd(t, "init", "--no-hooks")
+		if err != nil {
+			t.Fatalf("init failed: %v", err)
+		}
+
+		db, err := database.Open(filepath.Join(repoDir, ".git", "pkgs.sqlite3"))
+		if err != nil {
+			t.Fatalf("opening database: %v", err)
+		}
+		if _, err := db.Exec(`
+			DROP TABLE manifest_licenses;
+			UPDATE schema_info SET version = 15;
+		`); err != nil {
+			_ = db.Close()
+			t.Fatalf("downgrading test database: %v", err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatalf("closing database: %v", err)
+		}
+
+		addFileAndCommit(t, repoDir, "package.json", `{"name":"example","license":"Apache-2.0"}`, "Change license")
+
+		_, _, err = runCmd(t, "reindex")
+		if err == nil {
+			t.Fatal("expected reindex to reject an older schema")
+		}
+		if !strings.Contains(err.Error(), "schema version 15") {
+			t.Errorf("expected schema version in error, got: %v", err)
+		}
+		if !strings.Contains(err.Error(), "git pkgs upgrade") {
+			t.Errorf("expected upgrade instruction, got: %v", err)
 		}
 	})
 }

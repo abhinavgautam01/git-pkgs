@@ -44,6 +44,18 @@ func runReindex(cmd *cobra.Command, args []string) error {
 	}
 	defer func() { _ = db.Close() }()
 
+	schemaVersion, err := db.SchemaVersion()
+	if err != nil {
+		return fmt.Errorf("reading database schema version: %w", err)
+	}
+	if schemaVersion != database.SchemaVersion {
+		return fmt.Errorf(
+			"database schema version %d is outdated (current version is %d); run 'git pkgs upgrade'",
+			schemaVersion,
+			database.SchemaVersion,
+		)
+	}
+
 	if branch != "" {
 		return reindexBranch(cmd, repo, db, branch, quiet)
 	}
