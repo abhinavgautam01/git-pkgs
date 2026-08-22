@@ -363,12 +363,26 @@ func TestEmptyResultsRespectJSONFormat(t *testing.T) {
 				t.Fatalf("command failed: %v", err)
 			}
 
-			var result []any
-			if err := json.Unmarshal([]byte(stdout), &result); err != nil {
-				t.Fatalf("expected JSON array, got %q: %v", stdout, err)
-			}
-			if len(result) != 0 {
-				t.Fatalf("expected empty JSON array, got %v", result)
+			switch tt.name {
+			case "outdated", "licenses", "vulns no lockfile deps", "vulns no results":
+				var envelope struct {
+					Results []any              `json:"results"`
+					Sources []cmd.SourceStatus `json:"sources"`
+				}
+				if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
+					t.Fatalf("expected JSON envelope, got %q: %v", stdout, err)
+				}
+				if len(envelope.Results) != 0 {
+					t.Fatalf("expected empty JSON results, got %v", envelope.Results)
+				}
+			default:
+				var result []any
+				if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+					t.Fatalf("expected JSON array, got %q: %v", stdout, err)
+				}
+				if len(result) != 0 {
+					t.Fatalf("expected empty JSON array, got %v", result)
+				}
 			}
 		})
 	}

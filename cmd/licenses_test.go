@@ -301,10 +301,11 @@ func TestLicensesCommand(t *testing.T) {
 				t.Fatalf("version lookup warning = %v, want %v; stderr: %s", gotWarning, tt.wantWarning, stderr)
 			}
 
-			var result []cmd.LicenseInfo
-			if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+			var envelope cmd.ResultEnvelope[cmd.LicenseInfo]
+			if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
 				t.Fatalf("parse licenses output: %v\nOutput: %s", err, stdout)
 			}
+			result := envelope.Results
 			if len(result) != 1 {
 				t.Fatalf("license entries = %d, want 1", len(result))
 			}
@@ -357,10 +358,11 @@ func TestLicensesCommand(t *testing.T) {
 			t.Fatalf("missing ambiguity warning: %s", stderr)
 		}
 
-		var result []cmd.LicenseInfo
-		if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		var envelope cmd.ResultEnvelope[cmd.LicenseInfo]
+		if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
 			t.Fatalf("parse licenses output: %v\nOutput: %s", err, stdout)
 		}
+		result := envelope.Results
 		if len(result) != 1 {
 			t.Fatalf("license entries = %d, want 1", len(result))
 		}
@@ -446,10 +448,11 @@ func TestLicensesCommand(t *testing.T) {
 			t.Fatal("expected JSON output, got empty string")
 		}
 
-		var result []map[string]interface{}
-		if err := json.Unmarshal([]byte(output), &result); err != nil {
+		var envelope cmd.ResultEnvelope[map[string]interface{}]
+		if err := json.Unmarshal([]byte(output), &envelope); err != nil {
 			t.Fatalf("failed to parse JSON output: %v\nOutput: %s", err, output)
 		}
+		result := envelope.Results
 
 		if len(result) == 0 {
 			t.Fatal("expected at least one license entry")
@@ -937,10 +940,11 @@ services:
 		t.Fatal("expected JSON output, got empty string")
 	}
 
-	var results []cmd.LicenseInfo
-	if err := json.Unmarshal([]byte(output), &results); err != nil {
+	var envelope cmd.ResultEnvelope[cmd.LicenseInfo]
+	if err := json.Unmarshal([]byte(output), &envelope); err != nil {
 		t.Fatalf("failed to parse JSON: %v\nOutput: %s", err, output)
 	}
+	results := envelope.Results
 
 	for _, r := range results {
 		if strings.Contains(r.PURL, "docker") {
