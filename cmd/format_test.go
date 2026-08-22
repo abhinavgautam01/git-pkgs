@@ -18,6 +18,7 @@ func TestUnsupportedFormatValuesAreRejected(t *testing.T) {
 		{name: "sbom", args: []string{"sbom", "--format", "yaml"}, formats: "json, xml"},
 		{name: "licenses", args: []string{"licenses", "--format", "xml"}, formats: "text, json, csv"},
 		{name: "provenance", args: []string{"provenance", "--format", "yaml"}, formats: "text, json"},
+		{name: "changelog", args: []string{"changelog", "lodash", "--format", "yaml"}, formats: "text, json"},
 	}
 
 	for _, tt := range tests {

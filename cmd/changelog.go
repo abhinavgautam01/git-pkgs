@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -32,7 +33,23 @@ Examples:
 	changelogCmd.Flags().String("to", "", "Target/new version (defaults to latest)")
 	changelogCmd.Flags().StringP("ecosystem", "e", "", "Filter by ecosystem")
 	changelogCmd.Flags().StringP("manager", "m", "", "Override package manager (for ecosystem detection)")
+	changelogCmd.Flags().StringP("format", "f", "text", "Output format: text, json")
 	parent.AddCommand(changelogCmd)
+}
+
+type ChangelogEntry struct {
+	Version string `json:"version"`
+	Content string `json:"content"`
+}
+
+type ChangelogResult struct {
+	Package           string           `json:"package"`
+	Ecosystem         string           `json:"ecosystem"`
+	From              string           `json:"from"`
+	To                string           `json:"to"`
+	Repository        string           `json:"repository"`
+	ChangelogFilename string           `json:"changelog_filename"`
+	Entries           []ChangelogEntry `json:"entries"`
 }
 
 func runChangelog(cmd *cobra.Command, args []string) error {
@@ -40,6 +57,10 @@ func runChangelog(cmd *cobra.Command, args []string) error {
 	fromVersion, _ := cmd.Flags().GetString("from")
 	toVersion, _ := cmd.Flags().GetString("to")
 	managerFlag, _ := cmd.Flags().GetString("manager")
+	format, err := getFormatFlag(cmd, formatText, formatJSON)
+	if err != nil {
+		return err
+	}
 
 	ecosystem, pkg, _, err := ParsePackageArg(args[0], ecosystemFlag)
 	if err != nil {
@@ -94,6 +115,19 @@ func runChangelog(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("fetching changelog: %w", err)
 	}
 
+	if format == formatJSON {
+		result := buildChangelogResult(
+			parser,
+			pkg,
+			ecosystem,
+			fromVersion,
+			toVersion,
+			pkgInfo.Repository,
+			pkgInfo.ChangelogFilename,
+		)
+		return outputChangelogJSON(cmd, result)
+	}
+
 	if fromVersion != "" || toVersion != "" {
 		between, ok := parser.Between(fromVersion, toVersion)
 		if !ok {
@@ -126,6 +160,50 @@ func runChangelog(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+func buildChangelogResult(
+	parser *changelog.Parser,
+	packageName string,
+	ecosystem string,
+	fromVersion string,
+	toVersion string,
+	repository string,
+	changelogFilename string,
+) *ChangelogResult {
+	result := &ChangelogResult{
+		Package:           packageName,
+		Ecosystem:         ecosystem,
+		From:              fromVersion,
+		To:                toVersion,
+		Repository:        repository,
+		ChangelogFilename: changelogFilename,
+		Entries:           []ChangelogEntry{},
+	}
+
+	versions := parser.Versions()
+	if fromVersion != "" || toVersion != "" {
+		versions = parser.VersionsBetween(fromVersion, toVersion)
+	}
+
+	for _, version := range versions {
+		entry, ok := parser.Entry(version)
+		if !ok {
+			continue
+		}
+		result.Entries = append(result.Entries, ChangelogEntry{
+			Version: version,
+			Content: entry.Content,
+		})
+	}
+
+	return result
+}
+
+func outputChangelogJSON(cmd *cobra.Command, result *ChangelogResult) error {
+	encoder := json.NewEncoder(cmd.OutOrStdout())
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(result)
 }
 
 func detectEcosystem(managerFlag string) (string, error) {
