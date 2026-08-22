@@ -1847,11 +1847,12 @@ type CachedPackage struct {
 	EnrichedAt    time.Time `json:"enriched_at"`
 }
 
-// EcosystemSyncedAt returns the most recent package enrichment time for an ecosystem.
+// EcosystemSyncedAt returns the most recent package update time for an ecosystem
+// with package enrichment metadata.
 func (db *DB) EcosystemSyncedAt(ecosystem string) (time.Time, bool) {
 	var syncedAt sql.NullString
 	err := db.QueryRow(`
-		SELECT MAX(enriched_at)
+		SELECT MAX(updated_at)
 		FROM packages
 		WHERE ecosystem = ? AND enriched_at IS NOT NULL
 	`, ecosystem).Scan(&syncedAt)

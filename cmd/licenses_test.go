@@ -26,6 +26,7 @@ type mockEnrichmentClient struct {
 	getVersionsCalls int
 	getVersionCalls  int
 	bulkLookupCalls  int
+	bulkLookupErr    error
 	getVersionErr    error
 }
 
@@ -33,6 +34,9 @@ func (m *mockEnrichmentClient) BulkLookup(_ context.Context, purls []string) (ma
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.bulkLookupCalls++
+	if m.bulkLookupErr != nil {
+		return nil, m.bulkLookupErr
+	}
 
 	result := make(map[string]*enrichment.PackageInfo)
 	for _, p := range purls {
@@ -749,6 +753,40 @@ func TestLicensesCommand(t *testing.T) {
 		mock.mu.Unlock()
 		if bulkLookupCalls != 0 || getVersionCalls != 0 {
 			t.Fatalf("offline drift made network calls: BulkLookup=%d GetVersion=%d", bulkLookupCalls, getVersionCalls)
+		}
+	})
+
+	t.Run("drift propagates package metadata lookup failures", func(t *testing.T) {
+		mock, restore := setMockEnrichmentClient(&mockEnrichmentClient{
+			packages:      map[string]*enrichment.PackageInfo{},
+			bulkLookupErr: errors.New("package source unavailable"),
+		})
+		defer restore()
+
+		repoDir := createTestRepo(t)
+		addFileAndCommit(t, repoDir, "package-lock.json", packageLockJSON, "Add lockfile")
+
+		cleanup := chdir(t, repoDir)
+		defer cleanup()
+
+		rootCmd := cmd.NewRootCmd()
+		rootCmd.SetArgs([]string{"init"})
+		if err := rootCmd.Execute(); err != nil {
+			t.Fatalf("init failed: %v", err)
+		}
+
+		rootCmd = cmd.NewRootCmd()
+		rootCmd.SetArgs([]string{"licenses", "--drift", "--format", "json"})
+		err := rootCmd.Execute()
+		if err == nil || !strings.Contains(err.Error(), "package source unavailable") {
+			t.Fatalf("licenses --drift error = %v, want package lookup failure", err)
+		}
+
+		mock.mu.Lock()
+		calls := mock.bulkLookupCalls
+		mock.mu.Unlock()
+		if calls == 0 {
+			t.Fatal("expected package metadata lookup")
 		}
 	})
 

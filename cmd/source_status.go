@@ -27,7 +27,7 @@ type SourceStatus struct {
 	Upstream        string    `json:"upstream"`
 	Status          string    `json:"status"`
 	FetchedAt       time.Time `json:"fetched_at,omitzero"`
-	CacheAgeSeconds int64     `json:"cache_age_seconds,omitempty"`
+	CacheAgeSeconds *int64    `json:"cache_age_seconds,omitempty"`
 	Error           string    `json:"error,omitempty"`
 }
 
@@ -65,7 +65,7 @@ func sourceTrackerOrNew(trackers []*sourceTracker) *sourceTracker {
 }
 
 func (t *sourceTracker) consider(ecosystem, upstream string, supported bool) {
-	key := sourceKey{ecosystem: ecosystem, upstream: upstream}
+	key := newSourceKey(ecosystem, upstream)
 	observation := t.observation(key)
 	if !supported {
 		observation.unsupported = true
@@ -73,7 +73,7 @@ func (t *sourceTracker) consider(ecosystem, upstream string, supported bool) {
 }
 
 func (t *sourceTracker) markOK(ecosystem, upstream string, fetchedAt time.Time) {
-	observation := t.observation(sourceKey{ecosystem: ecosystem, upstream: upstream})
+	observation := t.observation(newSourceKey(ecosystem, upstream))
 	if fetchedAt.IsZero() {
 		fetchedAt = time.Now().UTC()
 	}
@@ -87,8 +87,21 @@ func (t *sourceTracker) markError(ecosystem, upstream string, err error) {
 	if err == nil {
 		return
 	}
-	observation := t.observation(sourceKey{ecosystem: ecosystem, upstream: upstream})
+	observation := t.observation(newSourceKey(ecosystem, upstream))
 	observation.errors = append(observation.errors, err)
+}
+
+func newSourceKey(ecosystem, upstream string) sourceKey {
+	return sourceKey{ecosystem: canonicalSourceEcosystem(ecosystem), upstream: upstream}
+}
+
+func canonicalSourceEcosystem(ecosystem string) string {
+	purlType := purl.EcosystemToPURLType(ecosystem)
+	canonical := purl.PURLTypeToEcosystem(purlType)
+	if canonical != "" {
+		return canonical
+	}
+	return ecosystem
 }
 
 func (t *sourceTracker) observation(key sourceKey) *sourceObservation {
@@ -136,10 +149,11 @@ func (t *sourceTracker) statuses(now time.Time) ([]SourceStatus, []string) {
 		case !observation.fetchedAt.IsZero():
 			status.Status = sourceStatusOK
 			status.FetchedAt = observation.fetchedAt.UTC()
-			age := now.Sub(status.FetchedAt)
-			if age > 0 {
-				status.CacheAgeSeconds = int64(age / time.Second)
+			ageSeconds := int64(0)
+			if age := now.Sub(status.FetchedAt); age > 0 {
+				ageSeconds = int64(age / time.Second)
 			}
+			status.CacheAgeSeconds = &ageSeconds
 			for _, message := range errorMessages {
 				warnings = append(warnings, sourceWarning(key, errors.New(message)))
 			}
@@ -199,6 +213,29 @@ func (t *sourceTracker) unavailableError() error {
 	return fmt.Errorf("all sources failed: %w", errors.Join(errs...))
 }
 
+func (t *sourceTracker) observedError() error {
+	keys := make([]sourceKey, 0, len(t.observations))
+	for key := range t.observations {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].ecosystem != keys[j].ecosystem {
+			return keys[i].ecosystem < keys[j].ecosystem
+		}
+		return keys[i].upstream < keys[j].upstream
+	})
+
+	var errs []error
+	for _, key := range keys {
+		for _, err := range t.observations[key].errors {
+			if err != nil {
+				errs = append(errs, errors.New(sourceWarning(key, err)))
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
 func sourceWarning(key sourceKey, err error) string {
 	if key.upstream == "" {
 		return fmt.Sprintf("%s: %v", key.ecosystem, err)
@@ -215,7 +252,7 @@ func outputResultEnvelope[T any](cmd *cobra.Command, envelope ResultEnvelope[T])
 func registrySource(ecosystem string) (string, bool) {
 	purlType := purl.EcosystemToPURLType(ecosystem)
 	for _, supported := range registries.SupportedEcosystems() {
-		if supported == purlType {
+		if purl.EcosystemToPURLType(supported) == purlType {
 			return sourceHostname(registries.DefaultURL(purlType)), true
 		}
 	}

@@ -85,12 +85,11 @@ func runOutdated(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(lockfileDeps) == 0 {
-		sources = newSourceTracker()
 		if format == formatJSON {
 			if err := outputOutdatedJSON(cmd, nil, sources); err != nil {
 				return err
 			}
-			return nil
+			return sources.unavailableError()
 		}
 		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No lockfile dependencies found.")
 		return nil
@@ -256,10 +255,6 @@ func getPackageData(
 			return result, nil
 		}
 
-		const outdatedTimeout = 60 * time.Second
-		ctx, cancel := context.WithTimeout(context.Background(), outdatedTimeout)
-		defer cancel()
-
 		var toSave []database.PackageEnrichmentData
 		purlsByEcosystem := make(map[string][]string)
 		for _, purlStr := range uncachedPurls {
@@ -267,8 +262,11 @@ func getPackageData(
 			purlsByEcosystem[dep.Ecosystem] = append(purlsByEcosystem[dep.Ecosystem], purlStr)
 		}
 		for ecosystem, ecosystemPURLs := range purlsByEcosystem {
+			const outdatedTimeout = 60 * time.Second
+			ctx, cancel := context.WithTimeout(context.Background(), outdatedTimeout)
 			upstream, _ := registrySource(ecosystem)
 			packages, lookupErr := client.BulkLookup(ctx, ecosystemPURLs)
+			cancel()
 			if lookupErr != nil {
 				sources.markError(ecosystem, upstream, wrapEcosystemsError(lookupErr))
 				continue

@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -393,6 +394,7 @@ func syncVulnerabilitiesForDeps(db *database.DB, source vulns.Source, lockfileDe
 
 	// Fetch all unique vulnerability details concurrently
 	fetchedVulns := make(map[string]*vulns.Vulnerability)
+	detailErrors := make(map[string]error)
 	var mu sync.Mutex
 
 	isTTY := false
@@ -416,7 +418,12 @@ func syncVulnerabilitiesForDeps(db *database.DB, source vulns.Source, lockfileDe
 			mu.Lock()
 			defer mu.Unlock()
 			fetchCount++
-			if err == nil && fullVuln != nil {
+			switch {
+			case err != nil:
+				detailErrors[id] = fmt.Errorf("fetching %s: %w", id, err)
+			case fullVuln == nil:
+				detailErrors[id] = fmt.Errorf("fetching %s: no vulnerability details returned", id)
+			default:
 				fetchedVulns[id] = fullVuln
 			}
 			if isTTY && !quiet {
@@ -435,9 +442,19 @@ func syncVulnerabilitiesForDeps(db *database.DB, source vulns.Source, lockfileDe
 	now := time.Now().Format(time.RFC3339)
 	seenVulns := make(map[string]bool)
 	totalVulns := 0
+	failedPackages := make(map[string]bool)
 
 	for i, batchVulns := range results {
 		dep := queries[i].dependency
+		for _, vulnerability := range batchVulns {
+			if _, failed := detailErrors[vulnerability.ID]; failed {
+				failedPackages[queries[i].purl.String()] = true
+				break
+			}
+		}
+		if failedPackages[queries[i].purl.String()] {
+			continue
+		}
 
 		// Clear existing vulns for this package
 		if err := db.DeleteVulnerabilitiesForPackage(dep.Ecosystem, dep.Name); err != nil {
@@ -520,15 +537,32 @@ func syncVulnerabilitiesForDeps(db *database.DB, source vulns.Source, lockfileDe
 	}
 
 	// Mark packages as synced
+	syncedPackages := 0
 	for _, query := range queries {
+		if failedPackages[query.purl.String()] {
+			continue
+		}
 		dep := query.dependency
 		if err := db.SetVulnsSyncedAt(query.purl.String(), dep.Ecosystem, dep.Name); err != nil {
 			return fmt.Errorf("recording sync time for %s/%s: %w", dep.Ecosystem, dep.Name, err)
 		}
+		syncedPackages++
 	}
 
 	if !quiet {
-		_, _ = fmt.Fprintf(w, "Synced %d vulnerabilities for %d packages.\n", totalVulns, len(queries))
+		_, _ = fmt.Fprintf(w, "Synced %d vulnerabilities for %d packages.\n", totalVulns, syncedPackages)
+	}
+	if len(detailErrors) > 0 {
+		ids := make([]string, 0, len(detailErrors))
+		for id := range detailErrors {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		errs := make([]error, 0, len(ids))
+		for _, id := range ids {
+			errs = append(errs, detailErrors[id])
+		}
+		return fmt.Errorf("fetching vulnerability details: %w", errors.Join(errs...))
 	}
 
 	return nil
@@ -630,12 +664,11 @@ func runVulnsScan(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(lockfileDeps) == 0 {
-		sources = newSourceTracker()
 		if format == formatJSON {
 			if err := outputVulnsJSON(cmd, nil, sources); err != nil {
 				return err
 			}
-			return nil
+			return sources.unavailableError()
 		}
 		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No lockfile dependencies found to scan.")
 		return nil
@@ -676,28 +709,29 @@ func runVulnsScan(cmd *cobra.Command, args []string) error {
 
 		if !noSync {
 			quietSync := format == formatJSON || format == formatSARIF
-			if syncErr := syncVulnerabilitiesForDeps(
+			syncErr := syncVulnerabilitiesForDeps(
 				db,
 				source,
 				ecosystemDeps,
 				false,
 				quietSync,
 				cmd.OutOrStdout(),
-			); syncErr != nil {
+			)
+			if syncErr != nil {
 				sources.markError(ecosystem, upstream, fmt.Errorf("syncing vulnerabilities: %w", syncErr))
-			} else if syncedAt, ok := db.EcosystemVulnsSyncedAt(ecosystem); ok {
-				sources.markOK(ecosystem, upstream, syncedAt)
-			} else {
-				sources.markOK(ecosystem, upstream, time.Now().UTC())
+			}
+			if cacheErr := markCachedVulnerabilitySource(db, ecosystemDeps, sources, upstream); cacheErr != nil {
+				return cacheErr
 			}
 		} else {
-			markCachedVulnerabilitySource(db, ecosystemDeps, sources, upstream)
+			if cacheErr := markCachedVulnerabilitySource(db, ecosystemDeps, sources, upstream); cacheErr != nil {
+				return cacheErr
+			}
 		}
 
 		ecosystemResults, scanErr := scanCached(db, ecosystemDeps, minSeverity)
 		if scanErr != nil {
-			sources.markError(ecosystem, upstream, scanErr)
-			continue
+			return fmt.Errorf("scanning cached vulnerabilities for %s: %w", ecosystem, scanErr)
 		}
 		vulnResults = append(vulnResults, ecosystemResults...)
 	}
@@ -746,7 +780,7 @@ func markCachedVulnerabilitySource(
 	deps []database.Dependency,
 	sources *sourceTracker,
 	upstream string,
-) {
+) error {
 	seen := make(map[string]bool)
 	for _, dep := range deps {
 		packagePURL := purl.MakePURLString(dep.Ecosystem, dep.Name, "")
@@ -756,8 +790,7 @@ func markCachedVulnerabilitySource(
 		seen[packagePURL] = true
 		syncedAt, err := db.GetVulnsSyncedAt(packagePURL)
 		if err != nil {
-			sources.markError(dep.Ecosystem, upstream, err)
-			continue
+			return fmt.Errorf("reading vulnerability cache status for %s: %w", packagePURL, err)
 		}
 		if syncedAt.IsZero() {
 			sources.markError(dep.Ecosystem, upstream, fmt.Errorf("vulnerability data is not cached for %s", packagePURL))
@@ -765,6 +798,7 @@ func markCachedVulnerabilitySource(
 		}
 		sources.markOK(dep.Ecosystem, upstream, syncedAt)
 	}
+	return nil
 }
 
 func vulnerabilitySourceUpstream(source vulns.Source) string {

@@ -79,12 +79,11 @@ func runDeprecated(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(resolved) == 0 {
-		sources = newSourceTracker()
 		if format == formatJSON {
 			if err := outputDeprecatedJSON(cmd, nil, sources); err != nil {
 				return err
 			}
-			return nil
+			return sources.unavailableError()
 		}
 		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No resolved dependencies found.")
 		return nil
@@ -245,7 +244,7 @@ func fetchDeprecatedVersions(
 		if parseErr != nil {
 			continue
 		}
-		ecosystem := parsed.Type
+		ecosystem := canonicalSourceEcosystem(parsed.Type)
 		upstream, _ := registrySource(ecosystem)
 		if result.err != nil {
 			sources.markError(ecosystem, upstream, result.err)
@@ -263,7 +262,7 @@ func fetchDeprecatedVersions(
 			continue
 		}
 		if parsed, err := purl.Parse(purlStr); err == nil {
-			ecosystem := parsed.Type
+			ecosystem := canonicalSourceEcosystem(parsed.Type)
 			upstream, _ := registrySource(ecosystem)
 			sources.markError(ecosystem, upstream, ctx.Err())
 		}
@@ -303,8 +302,11 @@ func cachedDeprecatedVersionDataWithTimes(
 				Status:      registries.VersionStatus(cached.Status),
 				Metadata:    cached.Metadata,
 			}
-			if parsed, err := purl.Parse(cached.PURL); err == nil && cached.StatusCheckedAt.After(checkedAt[parsed.Type]) {
-				checkedAt[parsed.Type] = cached.StatusCheckedAt
+			if parsed, err := purl.Parse(cached.PURL); err == nil {
+				ecosystem := canonicalSourceEcosystem(parsed.Type)
+				if cached.StatusCheckedAt.After(checkedAt[ecosystem]) {
+					checkedAt[ecosystem] = cached.StatusCheckedAt
+				}
 			}
 		}
 	}

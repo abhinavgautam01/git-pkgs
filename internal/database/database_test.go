@@ -879,6 +879,7 @@ func TestEcosystemSourceTimestamps(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	enrichedAt := time.Date(2026, time.August, 20, 10, 0, 0, 0, time.UTC)
+	updatedAt := enrichedAt.Add(time.Hour)
 	vulnsSyncedAt := enrichedAt.Add(2 * time.Hour)
 	_, err = db.Exec(`
 		INSERT INTO packages (
@@ -891,15 +892,15 @@ func TestEcosystemSourceTimestamps(t *testing.T) {
 		enrichedAt.Format(time.RFC3339),
 		vulnsSyncedAt.Format(time.RFC3339),
 		enrichedAt.Format(time.RFC3339),
-		enrichedAt.Format(time.RFC3339),
+		updatedAt.Format(time.RFC3339),
 	)
 	if err != nil {
 		t.Fatalf("insert package: %v", err)
 	}
 
 	gotEnrichedAt, ok := db.EcosystemSyncedAt("npm")
-	if !ok || !gotEnrichedAt.Equal(enrichedAt) {
-		t.Fatalf("EcosystemSyncedAt = %v, %v; want %v, true", gotEnrichedAt, ok, enrichedAt)
+	if !ok || !gotEnrichedAt.Equal(updatedAt) {
+		t.Fatalf("EcosystemSyncedAt = %v, %v; want %v, true", gotEnrichedAt, ok, updatedAt)
 	}
 	gotVulnsSyncedAt, ok := db.EcosystemVulnsSyncedAt("npm")
 	if !ok || !gotVulnsSyncedAt.Equal(vulnsSyncedAt) {
