@@ -12,6 +12,7 @@ import (
 	"github.com/git-pkgs/git-pkgs/internal/git"
 	"github.com/git-pkgs/purl"
 	"github.com/git-pkgs/sbom"
+	"github.com/git-pkgs/vers"
 	"github.com/spf13/cobra"
 )
 
@@ -67,7 +68,8 @@ func runSBOM(cmd *cobra.Command, args []string) error {
 	}
 
 	deps = filterByEcosystem(deps, ecosystem)
-	deps = selectSBOMDependencies(deps)
+	components := selectSBOMDependencies(deps)
+	deps = sbomComponentDependencies(components)
 
 	licenseMap := map[string]string{}
 	if !skipEnrichment {
@@ -96,7 +98,7 @@ func runSBOM(cmd *cobra.Command, args []string) error {
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Warning: %s\n", warning)
 	}
 
-	doc := buildSBOM(deps, licenseMap, projectName, projectVersion, projectLicenses)
+	doc := buildSBOM(components, licenseMap, projectName, projectVersion, projectLicenses)
 	return sbom.Encode(cmd.OutOrStdout(), doc, out)
 }
 
@@ -114,7 +116,7 @@ func sbomFormat(sbomType, format string) (sbom.Format, error) {
 }
 
 func buildSBOM(
-	deps []database.Dependency,
+	components []sbomComponent,
 	licenses map[string]string,
 	name, ver string,
 	projectLicenseData projectLicenses,
@@ -140,11 +142,20 @@ func buildSBOM(
 		},
 		Creators: []sbom.Creator{{Type: "Tool", Name: "git-pkgs-" + version}},
 	}
-	for _, d := range deps {
+	for _, component := range components {
+		d := component.primary
 		purlStr := sbomPURLForDependency(d)
 		p := sbom.Package{
 			Name:    d.Name,
 			Version: d.Requirement,
+		}
+		for i, occurrence := range component.occurrences {
+			prefix := fmt.Sprintf("git-pkgs:occurrence:%d:", i)
+			p.Properties = append(p.Properties,
+				sbom.Property{Name: prefix + "manifest_path", Value: occurrence.ManifestPath},
+				sbom.Property{Name: prefix + "requirement", Value: occurrence.Requirement},
+				sbom.Property{Name: prefix + "dependency_type", Value: occurrence.DependencyType},
+			)
 		}
 		if purlStr != "" {
 			p.ExternalRefs = []sbom.ExternalRef{{
@@ -175,7 +186,17 @@ func sbomPURLForDependency(dep database.Dependency) string {
 	return purl.MakePURLString(dep.Ecosystem, dep.Name, "")
 }
 
-func selectSBOMDependencies(deps []database.Dependency) []database.Dependency {
+type sbomComponent struct {
+	primary     database.Dependency
+	occurrences []database.Dependency
+}
+
+type sbomResolvedCandidate struct {
+	component int
+	direct    bool
+}
+
+func selectSBOMDependencies(deps []database.Dependency) []sbomComponent {
 	resolvedLocations := make(map[string]bool)
 	for _, dep := range deps {
 		if isResolvedDependency(dep) {
@@ -183,20 +204,110 @@ func selectSBOMDependencies(deps []database.Dependency) []database.Dependency {
 		}
 	}
 
-	selected := make([]database.Dependency, 0, len(deps))
-	seen := make(map[string]bool)
+	components := make([]sbomComponent, 0, len(deps))
+	componentByKey := make(map[string]int)
 	for _, dep := range deps {
 		if !isResolvedDependency(dep) && resolvedLocations[sbomDependencyLocation(dep)] {
 			continue
 		}
 		key := sbomDependencyKey(dep)
-		if seen[key] {
+		if _, ok := componentByKey[key]; ok {
 			continue
 		}
-		seen[key] = true
-		selected = append(selected, dep)
+		componentByKey[key] = len(components)
+		components = append(components, sbomComponent{primary: dep})
 	}
-	return selected
+
+	resolvedByLocation := make(map[string][]sbomResolvedCandidate)
+	for _, dep := range deps {
+		if !isResolvedDependency(dep) {
+			continue
+		}
+		component, ok := componentByKey[sbomDependencyKey(dep)]
+		if !ok {
+			continue
+		}
+		location := sbomDependencyLocation(dep)
+		resolvedByLocation[location] = addSBOMResolvedCandidate(
+			resolvedByLocation[location], component, dep.Direct,
+		)
+	}
+
+	for _, dep := range deps {
+		if !isResolvedDependency(dep) && resolvedLocations[sbomDependencyLocation(dep)] {
+			for _, component := range matchingSBOMResolvedComponents(
+				dep,
+				resolvedByLocation[sbomDependencyLocation(dep)],
+				components,
+			) {
+				components[component].occurrences = append(components[component].occurrences, dep)
+			}
+			continue
+		}
+
+		component, ok := componentByKey[sbomDependencyKey(dep)]
+		if ok {
+			components[component].occurrences = append(components[component].occurrences, dep)
+		}
+	}
+
+	return components
+}
+
+func sbomComponentDependencies(components []sbomComponent) []database.Dependency {
+	deps := make([]database.Dependency, 0, len(components))
+	for _, component := range components {
+		deps = append(deps, component.primary)
+	}
+	return deps
+}
+
+func addSBOMResolvedCandidate(
+	candidates []sbomResolvedCandidate,
+	component int,
+	direct bool,
+) []sbomResolvedCandidate {
+	for i := range candidates {
+		if candidates[i].component == component {
+			candidates[i].direct = candidates[i].direct || direct
+			return candidates
+		}
+	}
+	return append(candidates, sbomResolvedCandidate{component: component, direct: direct})
+}
+
+func matchingSBOMResolvedComponents(
+	dep database.Dependency,
+	candidates []sbomResolvedCandidate,
+	components []sbomComponent,
+) []int {
+	matching := make([]sbomResolvedCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		version := components[candidate.component].primary.Requirement
+		matches, err := vers.Satisfies(version, dep.Requirement, strings.ToLower(dep.Ecosystem))
+		if err == nil && matches {
+			matching = append(matching, candidate)
+		}
+	}
+	if len(matching) > 0 {
+		candidates = matching
+	}
+
+	direct := make([]sbomResolvedCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.direct {
+			direct = append(direct, candidate)
+		}
+	}
+	if len(direct) > 0 {
+		candidates = direct
+	}
+
+	result := make([]int, 0, len(candidates))
+	for _, candidate := range candidates {
+		result = append(result, candidate.component)
+	}
+	return result
 }
 
 func sbomDependencyKey(dep database.Dependency) string {
