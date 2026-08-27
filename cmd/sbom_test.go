@@ -83,7 +83,7 @@ func TestBuildSBOM(t *testing.T) {
 	}
 	licenses := map[string]string{"pkg:npm/lodash@4.17.21": "MIT"}
 
-	doc := buildSBOM(components, licenses, "demo", "1.0.0", projectLicenses{})
+	doc := buildSBOM(components, licenses, "demo", "1.0.0", projectLicenses{}, true)
 
 	if len(doc.Packages) != 2 {
 		t.Fatalf("Packages = %d, want 2", len(doc.Packages))
@@ -140,7 +140,7 @@ func TestEncodeSBOMOccurrencePropertiesCycloneDX(t *testing.T) {
 		DependencyType: "runtime",
 	}
 	document := buildSBOM([]sbomComponent{{primary: dep, occurrences: []database.Dependency{dep}}},
-		nil, "demo", "1.0.0", projectLicenses{})
+		nil, "demo", "1.0.0", projectLicenses{}, true)
 
 	var jsonOutput bytes.Buffer
 	if err := sbom.Encode(&jsonOutput, document, sbom.FormatCycloneDXJSON); err != nil {
@@ -181,6 +181,127 @@ func TestEncodeSBOMOccurrencePropertiesCycloneDX(t *testing.T) {
 		t.Fatalf("properties after CycloneDX XML encoding = %+v, want %+v",
 			properties, document.Packages[0].Properties)
 	}
+}
+
+func TestBuildSBOMOmitsOccurrencePropertiesForSPDX(t *testing.T) {
+	dep := database.Dependency{
+		Ecosystem:      "npm",
+		Name:           "lodash",
+		Requirement:    "4.17.21",
+		ManifestPath:   "package-lock.json",
+		ManifestKind:   manifestKindLockfile,
+		DependencyType: "runtime",
+	}
+	document := buildSBOM([]sbomComponent{{primary: dep, occurrences: []database.Dependency{dep}}},
+		nil, "demo", "1.0.0", projectLicenses{}, false)
+
+	if len(document.Packages) != 1 || len(document.Packages[0].Properties) != 0 {
+		t.Fatalf("SPDX package properties = %+v, want none", document.Packages)
+	}
+	var output bytes.Buffer
+	if err := sbom.Encode(&output, document, sbom.FormatSPDXJSON); err != nil {
+		t.Fatalf("Encode(SPDX JSON): %v", err)
+	}
+	if strings.Contains(output.String(), "git-pkgs:occurrence") {
+		t.Fatalf("SPDX output contains CycloneDX occurrence properties:\n%s", output.String())
+	}
+}
+
+func TestSBOMCommandAssociatesWorkspaceManifestWithRootLockfile(t *testing.T) {
+	repoDir := t.TempDir()
+	repository, err := gitgo.PlainInit(repoDir, false)
+	if err != nil {
+		t.Fatalf("PlainInit: %v", err)
+	}
+	commitSBOMFile(t, repository, repoDir, "package.json", `{
+  "name": "workspace-root",
+  "private": true,
+  "workspaces": ["packages/*"]
+}`, "add workspace root")
+	commitSBOMFile(t, repository, repoDir, "packages/web/package.json", `{
+  "name": "web",
+  "version": "1.0.0",
+  "dependencies": {"lodash": "^4.17.0"}
+}`, "add workspace package")
+	commitSBOMFile(t, repository, repoDir, "package-lock.json", `{
+  "name": "workspace-root",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "workspace-root",
+      "workspaces": ["packages/*"]
+    },
+    "packages/web": {
+      "name": "web",
+      "version": "1.0.0",
+      "dependencies": {"lodash": "^4.17.0"}
+    },
+    "node_modules/lodash": {
+      "version": "4.17.21"
+    }
+  }
+}`, "add workspace lockfile")
+
+	oldDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("Chdir(%s): %v", repoDir, err)
+	}
+	defer func() {
+		if err := os.Chdir(oldDirectory); err != nil {
+			t.Errorf("restore working directory: %v", err)
+		}
+	}()
+
+	command := NewRootCmd()
+	command.SetArgs([]string{"init", "--no-hooks"})
+	command.SetOut(&bytes.Buffer{})
+	command.SetErr(&bytes.Buffer{})
+	if err := command.Execute(); err != nil {
+		t.Fatalf("git pkgs init: %v", err)
+	}
+
+	var output bytes.Buffer
+	command = NewRootCmd()
+	command.SetArgs([]string{"sbom", "--skip-enrichment", "--format", "json"})
+	command.SetOut(&output)
+	command.SetErr(&bytes.Buffer{})
+	if err := command.Execute(); err != nil {
+		t.Fatalf("git pkgs sbom: %v", err)
+	}
+
+	document, err := sbom.Parse(output.Bytes())
+	if err != nil {
+		t.Fatalf("parse SBOM: %v\n%s", err, output.String())
+	}
+	var lodashPackages []sbom.Package
+	for _, pkg := range document.Packages {
+		if pkg.Name == "lodash" {
+			lodashPackages = append(lodashPackages, pkg)
+		}
+	}
+	if len(lodashPackages) != 1 {
+		t.Fatalf("lodash components = %d, want 1\n%s", len(lodashPackages), output.String())
+	}
+	lodash := lodashPackages[0]
+	if lodash.PURL() != "pkg:npm/lodash@4.17.21" {
+		t.Fatalf("lodash PURL = %q, want resolved version", lodash.PURL())
+	}
+	if !sbomPropertiesContain(lodash.Properties, "manifest_path", "packages/web/package.json") {
+		t.Fatalf("lodash properties = %+v, want workspace manifest occurrence", lodash.Properties)
+	}
+}
+
+func sbomPropertiesContain(properties []sbom.Property, suffix, value string) bool {
+	for _, property := range properties {
+		if strings.HasSuffix(property.Name, ":"+suffix) && property.Value == value {
+			return true
+		}
+	}
+	return false
 }
 
 func TestProjectLicenseAtRevision(t *testing.T) {
@@ -370,7 +491,7 @@ func testRootLicenses() (*sbom.SBOM, projectLicenses) {
 			Text: "Custom file terms\n",
 		}},
 	}
-	document := buildSBOM(nil, nil, "demo", "1.0.0", licenses)
+	document := buildSBOM(nil, nil, "demo", "1.0.0", licenses, true)
 	return document, licenses
 }
 
@@ -584,6 +705,32 @@ func TestSelectSBOMDependenciesRetainsWorkspaceOccurrences(t *testing.T) {
 	wantOccurrences := []database.Dependency{apiDeclaration, apiResolved, webDeclaration, webResolved}
 	if !slices.Equal(components[0].occurrences, wantOccurrences) {
 		t.Fatalf("occurrences = %+v, want %+v", components[0].occurrences, wantOccurrences)
+	}
+}
+
+func TestSelectSBOMDependenciesKeepsUnmatchedValidConstraintUnresolved(t *testing.T) {
+	declaration := database.Dependency{
+		Ecosystem:    "npm",
+		Name:         "lodash",
+		Requirement:  "^5.0.0",
+		PURL:         "pkg:npm/lodash",
+		ManifestPath: "package.json",
+		ManifestKind: manifestKindManifest,
+	}
+	resolved := declaration
+	resolved.Requirement = "4.17.21"
+	resolved.ManifestPath = "package-lock.json"
+	resolved.ManifestKind = manifestKindLockfile
+
+	components := selectSBOMDependencies([]database.Dependency{declaration, resolved})
+	if len(components) != 2 {
+		t.Fatalf("components = %d, want unresolved declaration and resolved lockfile", len(components))
+	}
+	if components[0].primary != declaration || !slices.Equal(components[0].occurrences, []database.Dependency{declaration}) {
+		t.Fatalf("unresolved component = %+v, want declaration only", components[0])
+	}
+	if components[1].primary != resolved || !slices.Equal(components[1].occurrences, []database.Dependency{resolved}) {
+		t.Fatalf("resolved component = %+v, want lockfile occurrence only", components[1])
 	}
 }
 
