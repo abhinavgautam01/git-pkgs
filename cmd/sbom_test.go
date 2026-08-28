@@ -243,6 +243,82 @@ func TestSBOMCommandAssociatesWorkspaceManifestWithRootLockfile(t *testing.T) {
   }
 }`, "add workspace lockfile")
 
+	document := runSBOMCommandForTest(t, repoDir)
+	var lodashPackages []sbom.Package
+	for _, pkg := range document.Packages {
+		if pkg.Name == "lodash" {
+			lodashPackages = append(lodashPackages, pkg)
+		}
+	}
+	if len(lodashPackages) != 1 {
+		t.Fatalf("lodash components = %d, want 1", len(lodashPackages))
+	}
+	lodash := lodashPackages[0]
+	if lodash.PURL() != "pkg:npm/lodash@4.17.21" {
+		t.Fatalf("lodash PURL = %q, want resolved version", lodash.PURL())
+	}
+	if !sbomPropertiesContain(lodash.Properties, "manifest_path", "packages/web/package.json") {
+		t.Fatalf("lodash properties = %+v, want workspace manifest occurrence", lodash.Properties)
+	}
+}
+
+func TestSBOMCommandDoesNotResolveDirectDeclarationToTransitiveVersion(t *testing.T) {
+	repoDir := t.TempDir()
+	repository, err := gitgo.PlainInit(repoDir, false)
+	if err != nil {
+		t.Fatalf("PlainInit: %v", err)
+	}
+	commitSBOMFile(t, repository, repoDir, "package.json", `{
+  "name": "direct-precedence",
+  "version": "1.0.0",
+  "dependencies": {"foo": "^5.0.0"}
+}`, "add package manifest")
+	commitSBOMFile(t, repository, repoDir, "package-lock.json", `{
+  "name": "direct-precedence",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "direct-precedence",
+      "version": "1.0.0",
+      "dependencies": {"foo": "^5.0.0"}
+    },
+    "node_modules/foo": {
+      "version": "4.0.0"
+    },
+    "node_modules/bar": {
+      "version": "1.0.0",
+      "dependencies": {"foo": "5.1.0"}
+    },
+    "node_modules/bar/node_modules/foo": {
+      "version": "5.1.0"
+    }
+  }
+}`, "add package lockfile")
+
+	document := runSBOMCommandForTest(t, repoDir)
+	fooByVersion := make(map[string]sbom.Package)
+	for _, pkg := range document.Packages {
+		if pkg.Name == "foo" {
+			fooByVersion[pkg.Version] = pkg
+		}
+	}
+	if len(fooByVersion) != 3 {
+		t.Fatalf("foo components = %+v, want unresolved declaration and two resolved versions", fooByVersion)
+	}
+	declaration, ok := fooByVersion["^5.0.0"]
+	if !ok || declaration.PURL() != "pkg:npm/foo" ||
+		!sbomPropertiesContain(declaration.Properties, "manifest_path", "package.json") {
+		t.Fatalf("unresolved foo declaration = %+v, want package.json occurrence", declaration)
+	}
+	transitive, ok := fooByVersion["5.1.0"]
+	if !ok || sbomPropertiesContain(transitive.Properties, "manifest_path", "package.json") {
+		t.Fatalf("transitive foo component = %+v, must not contain package.json occurrence", transitive)
+	}
+}
+
+func runSBOMCommandForTest(t *testing.T, repoDir string) *sbom.SBOM {
+	t.Helper()
 	oldDirectory, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("Getwd: %v", err)
@@ -277,22 +353,7 @@ func TestSBOMCommandAssociatesWorkspaceManifestWithRootLockfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse SBOM: %v\n%s", err, output.String())
 	}
-	var lodashPackages []sbom.Package
-	for _, pkg := range document.Packages {
-		if pkg.Name == "lodash" {
-			lodashPackages = append(lodashPackages, pkg)
-		}
-	}
-	if len(lodashPackages) != 1 {
-		t.Fatalf("lodash components = %d, want 1\n%s", len(lodashPackages), output.String())
-	}
-	lodash := lodashPackages[0]
-	if lodash.PURL() != "pkg:npm/lodash@4.17.21" {
-		t.Fatalf("lodash PURL = %q, want resolved version", lodash.PURL())
-	}
-	if !sbomPropertiesContain(lodash.Properties, "manifest_path", "packages/web/package.json") {
-		t.Fatalf("lodash properties = %+v, want workspace manifest occurrence", lodash.Properties)
-	}
+	return document
 }
 
 func sbomPropertiesContain(properties []sbom.Property, suffix, value string) bool {

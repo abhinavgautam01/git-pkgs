@@ -332,6 +332,16 @@ func matchingSBOMResolvedComponents(
 		return nil
 	}
 
+	direct := make([]sbomResolvedCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.direct {
+			direct = append(direct, candidate)
+		}
+	}
+	if len(direct) > 0 {
+		candidates = direct
+	}
+
 	matching := make([]sbomResolvedCandidate, 0, len(candidates))
 	constraintSupported := false
 	for _, candidate := range candidates {
@@ -350,16 +360,6 @@ func matchingSBOMResolvedComponents(
 			return nil
 		}
 		candidates = matching
-	}
-
-	direct := make([]sbomResolvedCandidate, 0, len(candidates))
-	for _, candidate := range candidates {
-		if candidate.direct {
-			direct = append(direct, candidate)
-		}
-	}
-	if len(direct) > 0 {
-		candidates = direct
 	}
 
 	result := make([]int, 0, len(candidates))
