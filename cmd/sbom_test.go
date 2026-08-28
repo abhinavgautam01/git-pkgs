@@ -317,6 +317,69 @@ func TestSBOMCommandDoesNotResolveDirectDeclarationToTransitiveVersion(t *testin
 	}
 }
 
+func TestSBOMCommandScopesDirectPreferenceToLockfileDirectory(t *testing.T) {
+	repoDir := t.TempDir()
+	repository, err := gitgo.PlainInit(repoDir, false)
+	if err != nil {
+		t.Fatalf("PlainInit: %v", err)
+	}
+	commitSBOMFile(t, repository, repoDir, "package.json", `{
+  "name": "workspace-root",
+  "private": true,
+  "workspaces": ["packages/*"],
+  "dependencies": {"foo": "^4.0.0"}
+}`, "add workspace root")
+	commitSBOMFile(t, repository, repoDir, "packages/web/package.json", `{
+  "name": "web",
+  "version": "1.0.0",
+  "dependencies": {"foo": "^5.0.0"}
+}`, "add workspace package")
+	commitSBOMFile(t, repository, repoDir, "package-lock.json", `{
+  "name": "workspace-root",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "workspace-root",
+      "workspaces": ["packages/*"],
+      "dependencies": {"foo": "^4.0.0"}
+    },
+    "packages/web": {
+      "name": "web",
+      "version": "1.0.0",
+      "dependencies": {"foo": "^5.0.0"}
+    },
+    "node_modules/foo": {
+      "version": "4.0.0"
+    },
+    "packages/web/node_modules/foo": {
+      "version": "5.1.0"
+    }
+  }
+}`, "add workspace lockfile")
+
+	document := runSBOMCommandForTest(t, repoDir)
+	fooByVersion := make(map[string]sbom.Package)
+	for _, pkg := range document.Packages {
+		if pkg.Name == "foo" {
+			fooByVersion[pkg.Version] = pkg
+		}
+	}
+	if len(fooByVersion) != 2 {
+		t.Fatalf("foo components = %+v, want two resolved versions", fooByVersion)
+	}
+	root := fooByVersion["4.0.0"]
+	if !sbomPropertiesContain(root.Properties, "manifest_path", "package.json") ||
+		sbomPropertiesContain(root.Properties, "manifest_path", "packages/web/package.json") {
+		t.Fatalf("root foo properties = %+v, want only root declaration", root.Properties)
+	}
+	workspace := fooByVersion["5.1.0"]
+	if !sbomPropertiesContain(workspace.Properties, "manifest_path", "packages/web/package.json") ||
+		sbomPropertiesContain(workspace.Properties, "manifest_path", "package.json") {
+		t.Fatalf("workspace foo properties = %+v, want only workspace declaration", workspace.Properties)
+	}
+}
+
 func runSBOMCommandForTest(t *testing.T, repoDir string) *sbom.SBOM {
 	t.Helper()
 	oldDirectory, err := os.Getwd()

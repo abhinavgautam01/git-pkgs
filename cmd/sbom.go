@@ -327,14 +327,15 @@ func matchingSBOMResolvedComponents(
 	candidates []sbomResolvedCandidate,
 	components []sbomComponent,
 ) []int {
-	candidates = nearestSBOMResolvedCandidates(path.Dir(dep.ManifestPath), candidates)
+	manifestDirectory := path.Clean(path.Dir(dep.ManifestPath))
+	candidates = nearestSBOMResolvedCandidates(manifestDirectory, candidates)
 	if len(candidates) == 0 {
 		return nil
 	}
 
 	direct := make([]sbomResolvedCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
-		if candidate.direct {
+		if candidate.direct && path.Clean(candidate.directory) == manifestDirectory {
 			direct = append(direct, candidate)
 		}
 	}
