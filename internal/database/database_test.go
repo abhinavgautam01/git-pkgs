@@ -3,6 +3,7 @@ package database_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -142,6 +143,25 @@ func TestCreate(t *testing.T) {
 			t.Error("expected fresh database with no branches")
 		}
 	})
+}
+
+func TestCheckSchemaVersion(t *testing.T) {
+	if err := database.CheckSchemaVersion(database.SchemaVersion); err != nil {
+		t.Fatalf("current schema rejected: %v", err)
+	}
+
+	olderErr := database.CheckSchemaVersion(database.SchemaVersion - 1)
+	if olderErr == nil || !strings.Contains(olderErr.Error(), "git pkgs upgrade") {
+		t.Fatalf("older schema error = %v, want upgrade instruction", olderErr)
+	}
+
+	newerErr := database.CheckSchemaVersion(database.SchemaVersion + 1)
+	if newerErr == nil || !strings.Contains(newerErr.Error(), "compatible git-pkgs binary") {
+		t.Fatalf("newer schema error = %v, want compatible binary instruction", newerErr)
+	}
+	if strings.Contains(newerErr.Error(), "git pkgs upgrade") {
+		t.Fatalf("newer schema error incorrectly recommends upgrade: %v", newerErr)
+	}
 }
 
 func TestOpen(t *testing.T) {
