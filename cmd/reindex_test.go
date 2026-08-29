@@ -2,7 +2,6 @@ package cmd_test
 
 import (
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -211,37 +210,14 @@ func TestReindex(t *testing.T) {
 		cleanup := chdir(t, repoDir)
 		defer cleanup()
 
-		_, _, err := runCmd(t, "init", "--no-hooks")
-		if err != nil {
+		if _, _, err := runCmd(t, "init", "--no-hooks"); err != nil {
 			t.Fatalf("init failed: %v", err)
 		}
-
-		db, err := database.Open(filepath.Join(repoDir, ".git", "pkgs.sqlite3"))
-		if err != nil {
-			t.Fatalf("opening database: %v", err)
-		}
-		if _, err := db.Exec(`
-			DROP TABLE manifest_licenses;
-			UPDATE schema_info SET version = 15;
-		`); err != nil {
-			_ = db.Close()
-			t.Fatalf("downgrading test database: %v", err)
-		}
-		if err := db.Close(); err != nil {
-			t.Fatalf("closing database: %v", err)
-		}
+		setTestDatabaseSchemaVersion(t, repoDir, database.SchemaVersion-1, true)
 
 		addFileAndCommit(t, repoDir, "package.json", `{"name":"example","license":"Apache-2.0"}`, "Change license")
 
-		_, _, err = runCmd(t, "reindex")
-		if err == nil {
-			t.Fatal("expected reindex to reject an older schema")
-		}
-		if !strings.Contains(err.Error(), "schema version 15") {
-			t.Errorf("expected schema version in error, got: %v", err)
-		}
-		if !strings.Contains(err.Error(), "git pkgs upgrade") {
-			t.Errorf("expected upgrade instruction, got: %v", err)
-		}
+		_, _, err := runCmd(t, "reindex")
+		assertOlderSchemaError(t, err)
 	})
 }
