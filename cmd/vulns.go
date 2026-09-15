@@ -1514,7 +1514,7 @@ func runVulnsBlame(cmd *cobra.Command, args []string) error {
 	if allTime {
 		vulns, err = getAllTimeVulns(db, branch.ID, ecosystem, ecosystemFilter)
 	} else {
-		vulns, err = getVulnsAtRef(repo, db, branch.ID, refHEAD, ecosystem, ecosystemFilter)
+		vulns, err = getVulnsAtCommit(db, branch.ID, branch.LastAnalyzedSHA, ecosystem, ecosystemFilter)
 	}
 	if err != nil {
 		return fmt.Errorf("getting vulnerabilities: %w", err)
