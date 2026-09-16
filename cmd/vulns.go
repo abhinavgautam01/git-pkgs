@@ -1985,7 +1985,7 @@ Shows the exposure time from when the vulnerable package was first added.`,
 	}
 
 	exposureCmd.Flags().StringP("branch", "b", "", "Branch to query (default: first tracked branch)")
-	exposureCmd.Flags().StringP("ref", "r", "", "Check exposure at specific commit (default: HEAD)")
+	exposureCmd.Flags().StringP("ref", "r", "", "Check exposure at specific commit (default: selected branch's latest indexed commit)")
 	exposureCmd.Flags().StringP("ecosystem", "e", "", "Filter by ecosystem")
 	exposureCmd.Flags().StringP("severity", "s", "", "Minimum severity: critical, high, medium, low")
 	exposureCmd.Flags().StringP("format", "f", "text", "Output format: text, json")
@@ -2032,18 +2032,14 @@ func runVulnsExposure(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Get vulnerabilities at the specified ref
-	targetRef := ref
-	if targetRef == "" {
-		targetRef = refHEAD
-	}
-
 	var vulns []VulnResult
 	if allTime {
 		// Get all historical vulnerabilities by scanning commit history
 		vulns, err = getAllTimeVulns(db, branch.ID, ecosystem, ecosystemFilter)
+	} else if ref == "" {
+		vulns, err = getVulnsAtCommit(db, branch.ID, branch.LastAnalyzedSHA, ecosystem, ecosystemFilter)
 	} else {
-		vulns, err = getVulnsAtRef(repo, db, branch.ID, targetRef, ecosystem, ecosystemFilter)
+		vulns, err = getVulnsAtRef(repo, db, branch.ID, ref, ecosystem, ecosystemFilter)
 	}
 	if err != nil {
 		return fmt.Errorf("getting vulnerabilities: %w", err)

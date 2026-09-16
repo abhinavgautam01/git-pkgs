@@ -115,6 +115,11 @@ Options: `-e`, `-s`, `-b`, `-f`, `--summary`
 
 ### exposure
 
+By default, queries the selected branch's latest indexed commit, even when another
+branch is checked out. Select a branch with `--branch` (defaults to the first
+tracked branch), or use `--ref` to query a specific commit or Git ref within that
+branch's indexed history.
+
 Calculate exposure windows and remediation metrics:
 
 ```
@@ -146,7 +151,7 @@ Show all-time stats for all historical vulnerabilities:
 $ git pkgs vulns exposure --all-time --summary
 ```
 
-Options: `-e`, `-s`, `-b`, `-f`, `--summary`, `--all-time`
+Options: `-e`, `-s`, `-b`, `-r`/`--ref`, `-f`, `--summary`, `--all-time`
 
 ### diff
 
