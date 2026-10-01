@@ -100,6 +100,14 @@ func indexedProjectLicenses(db *database.DB, sha, branchName string) (map[string
 	if db == nil {
 		return nil, nil
 	}
+	// Databases from before the license index have no table; parse the tree instead.
+	hasTable, err := db.HasManifestLicenses()
+	if err != nil {
+		return nil, fmt.Errorf("checking indexed project licenses: %w", err)
+	}
+	if !hasTable {
+		return nil, nil
+	}
 	branch, err := resolveBranch(db, branchName)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil

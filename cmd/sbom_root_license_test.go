@@ -111,7 +111,7 @@ func TestProjectLicensesIndexedHistoryMatchesTree(t *testing.T) {
 			assertProjectLicenseCacheMatchesTree(t, repo, db, revision)
 		})
 	}
-	// Pre-license-index databases and on-demand-only databases have no license events.
+	// Databases indexed without license events must match tree parsing.
 	if _, err := db.Exec("DELETE FROM manifest_licenses"); err != nil {
 		t.Fatal(err)
 	}

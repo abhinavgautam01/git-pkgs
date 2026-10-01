@@ -321,6 +321,19 @@ type ManifestLicense struct {
 	LicenseFile  string   `json:"license_file,omitempty"`
 }
 
+// HasManifestLicenses reports whether the database has the manifest_licenses
+// table. Databases created before schema version 16 do not.
+func (db *DB) HasManifestLicenses() (bool, error) {
+	var count int
+	err := db.QueryRow(
+		"SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'manifest_licenses'",
+	).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 // GetManifestLicensesAtRef returns the latest license state for every active
 // package manifest at ref on the given branch. License events are stored only
 // when a manifest changes, so the query selects each manifest's most recent
