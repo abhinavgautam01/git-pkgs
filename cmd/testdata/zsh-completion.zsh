@@ -14,6 +14,7 @@ if [[ $1 == --child ]]; then
     probe-completion() {
         zle expand-or-complete
         print -r -- "$BUFFER" >> "$PKGS_RESULT"
+        BUFFER=
         print -r -- '__COMPLETED__'
     }
     zle -N probe-completion
@@ -42,6 +43,5 @@ else
     while IFS= read -r input; do
         zpty -w -n shell "$input"$'\t'
         wait-for-output __COMPLETED__ || exit 1
-        zpty -w -n shell $'\C-c'
     done < "$PKGS_INPUT"
 fi
