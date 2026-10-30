@@ -268,9 +268,35 @@ func TestBuildOSVQueriesUsesCurrentAPIMapping(t *testing.T) {
 		t.Errorf("Maven request name = %q, want org.apache.commons:commons-text", got)
 	}
 	if len(skipped) != 2 ||
-		skipped[0].reason != osvSkipUnrepresentablePURL || skipped[0].dependency.Name != "apple.swift-argument-parser" ||
+		skipped[0].reason != osvSkipUnsupportedIdentity || skipped[0].dependency.Name != "apple.swift-argument-parser" ||
 		skipped[1].reason != osvSkipUnsupportedEcosystem || skipped[1].dependency.Ecosystem != "cocoapods" {
 		t.Fatalf("skipped = %#v, want Swift registry identity then CocoaPods dependency", skipped)
+	}
+}
+
+func TestHasOSVPackageIdentity(t *testing.T) {
+	for _, tt := range []struct {
+		input string
+		want  bool
+	}{
+		{"pkg:swift/apple/swift-argument-parser@1.0.0", false},
+		{"pkg:swift/Apple/Swift-NIO@2.0.0", false},
+		{"pkg:swift/github.com/apple/swift-nio@2.0.0", true},
+		{"pkg:swift/git.example.com/group/subgroup/package@1.0.0", true},
+		{"pkg:npm/lodash@4.17.21", true},
+	} {
+		t.Run(tt.input, func(t *testing.T) {
+			p, err := purl.Parse(tt.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := hasOSVPackageIdentity(p); got != tt.want {
+				t.Errorf("hasOSVPackageIdentity(%q) = %t, want %t", tt.input, got, tt.want)
+			}
+		})
+	}
+	if hasOSVPackageIdentity(nil) {
+		t.Fatal("nil PURL accepted for OSV")
 	}
 }
 
