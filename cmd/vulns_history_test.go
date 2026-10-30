@@ -1,7 +1,12 @@
 package cmd_test
 
 import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/git-pkgs/git-pkgs/internal/database"
@@ -37,7 +42,69 @@ const swiftSourcePackageResolved = `{
   "version": 2
 }`
 
-func TestVulnsHistoryRejectsUnrepresentablePackageIdentity(t *testing.T) {
+func TestVulnsSwiftMixedIdentities(t *testing.T) {
+	const lockfile = `{"version": 3, "pins": [
+		{"identity":"cryptoswift", "kind":"remoteSourceControl",
+		 "location":"https://github.com/krzyzanowskim/CryptoSwift.git",
+		 "state":{"revision":"19b3c3ceed117c5cc883517c4e658548315ba70b", "version":"1.6.0"}},
+		{"identity":"apple.swift-argument-parser", "kind":"registry", "location":"",
+		 "state":{"version":"1.6.0"}}
+	]}`
+	for _, args := range [][]string{{"scan", "--live"}, {"scan"}, {"sync"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			dir := createTestRepo(t)
+			addFileAndCommit(t, dir, "Package.resolved", lockfile, "Add Swift dependencies")
+			t.Cleanup(chdir(t, dir))
+			if _, _, err := runCmd(t, "init", "--no-hooks"); err != nil {
+				t.Fatal(err)
+			}
+			transport := &swiftOSVTransport{}
+			original := http.DefaultTransport
+			http.DefaultTransport = transport
+			t.Cleanup(func() { http.DefaultTransport = original })
+			stdout, stderr, err := runCmd(t, append([]string{"vulns"}, args...)...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := `Skipping 1 dependency with a package identity that cannot be queried in OSV: swift package "apple.swift-argument-parser" (Package.resolved).`
+			if !strings.Contains(stdout+stderr, want) {
+				t.Fatalf("missing skip notice: stdout=%q stderr=%q", stdout, stderr)
+			}
+			if transport.queries != 1 {
+				t.Fatalf("queried %d packages, want one source dependency", transport.queries)
+			}
+		})
+	}
+}
+
+type swiftOSVTransport struct{ queries int }
+
+func (s *swiftOSVTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.URL.Host != "api.osv.dev" || req.URL.Path != "/v1/querybatch" {
+		return nil, fmt.Errorf("unexpected request: %s", req.URL)
+	}
+	var body struct {
+		Queries []struct {
+			Package struct{ Ecosystem, Name string }
+		}
+	}
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		return nil, err
+	}
+	if len(body.Queries) != 1 || body.Queries[0].Package.Ecosystem != "SwiftURL" ||
+		body.Queries[0].Package.Name != "github.com/krzyzanowskim/CryptoSwift" {
+		return nil, fmt.Errorf("unexpected OSV queries: %+v", body.Queries)
+	}
+	s.queries += len(body.Queries)
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(`{"results":[{}]}`)),
+		Request:    req,
+	}, nil
+}
+
+func TestVulnsHistoryRejectsUnsupportedPackageIdentity(t *testing.T) {
 	repoDir := createTestRepo(t)
 	addFileAndCommit(t, repoDir, "Package.resolved", swiftRegistryPackageResolved, "Add Swift lockfile")
 
@@ -53,13 +120,13 @@ func TestVulnsHistoryRejectsUnrepresentablePackageIdentity(t *testing.T) {
 		t.Fatal("vulns history error = nil, want unsupported package identity error")
 	}
 
-	want := `querying OSV for swift package "apple.swift-argument-parser": package identity cannot be represented as a PURL`
+	want := `querying OSV for swift package "apple.swift-argument-parser": package identity cannot be queried in OSV`
 	if err.Error() != want {
 		t.Fatalf("vulns history error = %q, want %q", err, want)
 	}
 }
 
-func TestVulnsScanReportsUnrepresentablePackageIdentity(t *testing.T) {
+func TestVulnsScanReportsUnsupportedPackageIdentity(t *testing.T) {
 	repoDir := createTestRepo(t)
 	addFileAndCommit(t, repoDir, "Package.resolved", swiftRegistryPackageResolved, "Add Swift lockfile")
 
@@ -74,7 +141,7 @@ func TestVulnsScanReportsUnrepresentablePackageIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("vulns scan failed: %v", err)
 	}
-	want := "Skipping 1 dependency with a package identity that cannot be represented as a PURL: " +
+	want := "Skipping 1 dependency with a package identity that cannot be queried in OSV: " +
 		"swift package \"apple.swift-argument-parser\" (Package.resolved).\n"
 	if stderr != want {
 		t.Fatalf("vulns scan stderr = %q, want %q", stderr, want)

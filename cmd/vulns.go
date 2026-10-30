@@ -27,6 +27,7 @@ import (
 )
 
 const (
+	swiftPURLType            = "swift"
 	vulnsSyncTimeout         = 5 * time.Minute
 	vulnsQueryTimeout        = 120 * time.Second
 	vulnsShowTimeout         = 30 * time.Second
@@ -53,7 +54,7 @@ type osvSkipReason uint8
 
 const (
 	osvSkipUnsupportedEcosystem osvSkipReason = iota
-	osvSkipUnrepresentablePURL
+	osvSkipUnsupportedIdentity
 )
 
 type skippedOSVDependency struct {
@@ -73,8 +74,8 @@ func buildOSVQueries(deps []database.Dependency, includeVersion bool) (queries [
 		}
 
 		packagePURL := purl.MakePURL(dep.Ecosystem, dep.Name, version)
-		if packagePURL == nil {
-			skipped = append(skipped, skippedOSVDependency{dependency: dep, reason: osvSkipUnrepresentablePURL})
+		if !hasOSVPackageIdentity(packagePURL) {
+			skipped = append(skipped, skippedOSVDependency{dependency: dep, reason: osvSkipUnsupportedIdentity})
 			continue
 		}
 		osvEcosystem, supported, overrideType := osvEcosystemForPURLType(packagePURL.Type)
@@ -96,6 +97,15 @@ func buildOSVQueries(deps []database.Dependency, includeVersion bool) (queries [
 		})
 	}
 	return queries, skipped
+}
+
+func hasOSVPackageIdentity(p *purl.PURL) bool {
+	if p == nil {
+		return false
+	}
+	// SwiftURL advisories use source coordinates, not registry scopes.
+	host, _, _ := strings.Cut(p.Namespace, "/")
+	return p.Type != swiftPURLType || strings.Contains(host, ".")
 }
 
 // osvEcosystemForPURLType maps PURL types to names accepted by OSV's query API.
@@ -135,7 +145,7 @@ func osvEcosystemForPURLType(purlType string) (string, bool, bool) {
 		return "Pub", true, false
 	case "pypi":
 		return "PyPI", true, false
-	case "swift":
+	case swiftPURLType:
 		return "SwiftURL", true, true
 	default:
 		return "", false, false
@@ -143,18 +153,18 @@ func osvEcosystemForPURLType(purlType string) (string, bool, bool) {
 }
 
 func reportSkippedOSVDependencies(w io.Writer, skipped []skippedOSVDependency) {
-	var unsupported, unrepresentable []database.Dependency
+	var unsupported, unsupportedIdentities []database.Dependency
 	for _, item := range skipped {
 		switch item.reason {
 		case osvSkipUnsupportedEcosystem:
 			unsupported = append(unsupported, item.dependency)
-		case osvSkipUnrepresentablePURL:
-			unrepresentable = append(unrepresentable, item.dependency)
+		case osvSkipUnsupportedIdentity:
+			unsupportedIdentities = append(unsupportedIdentities, item.dependency)
 		}
 	}
 
 	reportUnsupportedOSVDependencies(w, unsupported)
-	reportUnrepresentableOSVDependencies(w, unrepresentable)
+	reportUnsupportedOSVIdentities(w, unsupportedIdentities)
 }
 
 func reportUnsupportedOSVDependencies(w io.Writer, skipped []database.Dependency) {
@@ -197,7 +207,7 @@ func reportUnsupportedOSVDependencies(w io.Writer, skipped []database.Dependency
 	)
 }
 
-func reportUnrepresentableOSVDependencies(w io.Writer, skipped []database.Dependency) {
+func reportUnsupportedOSVIdentities(w io.Writer, skipped []database.Dependency) {
 	if len(skipped) == 0 {
 		return
 	}
@@ -218,17 +228,14 @@ func reportUnrepresentableOSVDependencies(w io.Writer, skipped []database.Depend
 	sort.Strings(values)
 
 	dependencyLabel := "dependency with a package identity"
-	purlLabel := "a PURL"
 	if len(skipped) != 1 {
 		dependencyLabel = "dependencies with package identities"
-		purlLabel = "PURLs"
 	}
 	_, _ = fmt.Fprintf(
 		w,
-		"Skipping %d %s that cannot be represented as %s: %s.\n",
+		"Skipping %d %s that cannot be queried in OSV: %s.\n",
 		len(skipped),
 		dependencyLabel,
-		purlLabel,
 		strings.Join(values, ", "),
 	)
 }
@@ -1987,9 +1994,9 @@ func runVulnsHistory(cmd *cobra.Command, args []string) error {
 		}
 
 		p := purl.MakePURL(pkgDep.Ecosystem, pkgDep.Name, pkgDep.Requirement)
-		if p == nil {
+		if !hasOSVPackageIdentity(p) {
 			return fmt.Errorf(
-				"querying OSV for %s package %q: package identity cannot be represented as a PURL",
+				"querying OSV for %s package %q: package identity cannot be queried in OSV",
 				pkgDep.Ecosystem,
 				pkgDep.Name,
 			)
